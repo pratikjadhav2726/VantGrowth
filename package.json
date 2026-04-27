@@ -1,0 +1,23 @@
+{
+  "name": "growthos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GrowthOS v4 monorepo scaffold",
+  "packageManager": "pnpm@10.17.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "format": "biome format --write .",
+    "check": "biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.15.21",
+    "turbo": "^2.5.2",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.8"
+  }
+}
