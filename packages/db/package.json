@@ -4,11 +4,7 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "files": [
-    "dist",
-    "src",
-    "migrations"
-  ],
+  "files": ["dist", "src", "migrations"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "biome check src",

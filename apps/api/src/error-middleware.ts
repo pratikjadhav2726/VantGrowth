@@ -7,9 +7,9 @@ export const mapErrorToResponse = (error: unknown, c: Context): Response => {
     return c.json(
       {
         error: "Request validation failed",
-        details: error.issues
+        details: error.issues,
       },
-      400
+      400,
     );
   }
 
@@ -17,16 +17,16 @@ export const mapErrorToResponse = (error: unknown, c: Context): Response => {
     return c.json(
       {
         error: error.message,
-        details: error.details
+        details: error.details,
       },
-      error.status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 503
+      error.status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 503,
     );
   }
 
   return c.json(
     {
-      error: "Internal server error"
+      error: "Internal server error",
     },
-    500
+    500,
   );
 };

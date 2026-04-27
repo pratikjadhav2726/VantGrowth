@@ -11,14 +11,14 @@ describe("InMemoryOutboxRepository", () => {
       tenantId,
       eventType: "tenant.created.v1",
       idempotencyKey: "idem-1",
-      payload: { plan: "starter" }
+      payload: { plan: "starter" },
     });
 
     const second = await repository.enqueue({
       tenantId,
       eventType: "tenant.created.v1",
       idempotencyKey: "idem-1",
-      payload: { plan: "starter" }
+      payload: { plan: "starter" },
     });
 
     expect(second.id).toBe(first.id);
@@ -30,14 +30,14 @@ describe("InMemoryOutboxRepository", () => {
       tenantId,
       eventType: "approval.decided.v1",
       idempotencyKey: "approval-1",
-      payload: { decision: "approved" }
+      payload: { decision: "approved" },
     });
 
     await repository.enqueue({
       tenantId: "00000000-0000-4000-8000-000000000002",
       eventType: "approval.decided.v1",
       idempotencyKey: "approval-1",
-      payload: { decision: "approved" }
+      payload: { decision: "approved" },
     });
 
     const before = await repository.listUnconsumed(tenantId, 10);

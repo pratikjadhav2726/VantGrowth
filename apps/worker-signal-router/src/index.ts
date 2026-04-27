@@ -4,13 +4,13 @@ import { SignalRouter } from "./signal-router.js";
 
 export const createSignalRouterFromEnv = async (): Promise<SignalRouter> => {
   const outboxRepository = new PostgresOutboxRepository(createPgPoolFromEnv(), {
-    actorKind: "system"
+    actorKind: "system",
   });
   const eventPublisher = await NatsJetStreamPublisher.connect();
 
   return new SignalRouter({
     outboxRepository,
-    eventPublisher
+    eventPublisher,
   });
 };
 

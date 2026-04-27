@@ -4,11 +4,9 @@ import { createApp } from "./app.js";
 const app = createApp();
 const port = Number(process.env.PORT ?? 3001);
 
-serve(
-  {
-    fetch: app.fetch,
-    port
-  }
-);
+serve({
+  fetch: app.fetch,
+  port,
+});
 
 console.log(`@growthos/api listening on ${port}`);

@@ -1,13 +1,17 @@
 import {
+  type EnqueueOutboxEvent,
+  type StoredOutboxEvent,
   enqueueOutboxEventSchema,
   storedOutboxEventSchema,
-  type EnqueueOutboxEvent,
-  type StoredOutboxEvent
 } from "./contracts.js";
 
 export interface OutboxRepository {
   enqueue(command: EnqueueOutboxEvent): Promise<StoredOutboxEvent>;
-  markConsumed(tenantId: string, eventId: string, consumedAt?: Date): Promise<StoredOutboxEvent>;
+  markConsumed(
+    tenantId: string,
+    eventId: string,
+    consumedAt?: Date,
+  ): Promise<StoredOutboxEvent>;
   listUnconsumed(tenantId: string, limit: number): Promise<StoredOutboxEvent[]>;
 }
 
@@ -26,7 +30,10 @@ export class InMemoryOutboxRepository implements OutboxRepository {
 
     if (existingId) {
       const existing = this.eventsById.get(existingId);
-      if (!existing) throw new Error(`Outbox idempotency index is corrupt for ${existingId}`);
+      if (!existing)
+        throw new Error(
+          `Outbox idempotency index is corrupt for ${existingId}`,
+        );
       return existing;
     }
 
@@ -34,7 +41,7 @@ export class InMemoryOutboxRepository implements OutboxRepository {
       ...parsed,
       id: String(++this.sequence),
       createdAt: new Date(),
-      consumedAt: null
+      consumedAt: null,
     });
 
     this.eventsById.set(event.id, event);
@@ -42,23 +49,33 @@ export class InMemoryOutboxRepository implements OutboxRepository {
     return event;
   }
 
-  async markConsumed(tenantId: string, eventId: string, consumedAt = new Date()): Promise<StoredOutboxEvent> {
+  async markConsumed(
+    tenantId: string,
+    eventId: string,
+    consumedAt = new Date(),
+  ): Promise<StoredOutboxEvent> {
     const event = this.eventsById.get(eventId);
     if (!event) throw new Error(`Outbox event not found: ${eventId}`);
-    if (event.tenantId !== tenantId) throw new Error(`Outbox event not found for tenant: ${eventId}`);
+    if (event.tenantId !== tenantId)
+      throw new Error(`Outbox event not found for tenant: ${eventId}`);
 
     const consumed = storedOutboxEventSchema.parse({
       ...event,
-      consumedAt
+      consumedAt,
     });
 
     this.eventsById.set(eventId, consumed);
     return consumed;
   }
 
-  async listUnconsumed(tenantId: string, limit: number): Promise<StoredOutboxEvent[]> {
+  async listUnconsumed(
+    tenantId: string,
+    limit: number,
+  ): Promise<StoredOutboxEvent[]> {
     return Array.from(this.eventsById.values())
-      .filter((event) => event.tenantId === tenantId && event.consumedAt === null)
+      .filter(
+        (event) => event.tenantId === tenantId && event.consumedAt === null,
+      )
       .sort((a, b) => Number(a.id) - Number(b.id))
       .slice(0, limit);
   }

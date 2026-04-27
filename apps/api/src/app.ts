@@ -1,8 +1,12 @@
-import { Hono } from "hono";
-import { motionScoringInputSchema, scoreMotions } from "@growthos/core";
 import type { PaperclipClientPort } from "@growthos/adapter";
 import { PaperclipClient, paperclipConfigFromEnv } from "@growthos/adapter";
-import { createPgPoolFromEnv, PostgresOutboxRepository, type OutboxRepository } from "@growthos/db";
+import { motionScoringInputSchema, scoreMotions } from "@growthos/core";
+import {
+  type OutboxRepository,
+  PostgresOutboxRepository,
+  createPgPoolFromEnv,
+} from "@growthos/db";
+import { Hono } from "hono";
 import { mapErrorToResponse } from "./error-middleware.js";
 import { createCommandRoutes } from "./routes/commands.js";
 import { createPaperclipRoutes } from "./routes/paperclip.js";
@@ -12,7 +16,9 @@ export interface AppDependencies {
   outboxRepository?: OutboxRepository;
 }
 
-const resolvePaperclipClient = (deps: AppDependencies): PaperclipClientPort | null => {
+const resolvePaperclipClient = (
+  deps: AppDependencies,
+): PaperclipClientPort | null => {
   if (deps.paperclipClient) return deps.paperclipClient;
 
   const baseUrl = process.env.PAPERCLIP_BASE_URL;
@@ -23,17 +29,19 @@ const resolvePaperclipClient = (deps: AppDependencies): PaperclipClientPort | nu
     paperclipConfigFromEnv({
       PAPERCLIP_BASE_URL: baseUrl,
       PAPERCLIP_SERVICE_TOKEN: token,
-      PAPERCLIP_TIMEOUT_MS: process.env.PAPERCLIP_TIMEOUT_MS
-    })
+      PAPERCLIP_TIMEOUT_MS: process.env.PAPERCLIP_TIMEOUT_MS,
+    }),
   );
 };
 
-const resolveOutboxRepository = (deps: AppDependencies): OutboxRepository | null => {
+const resolveOutboxRepository = (
+  deps: AppDependencies,
+): OutboxRepository | null => {
   if (deps.outboxRepository) return deps.outboxRepository;
   if (!process.env.DATABASE_URL) return null;
 
   return new PostgresOutboxRepository(createPgPoolFromEnv(), {
-    actorKind: "system"
+    actorKind: "system",
   });
 };
 
@@ -44,8 +52,8 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
   app.get("/health", (c) =>
     c.json({
       ok: true,
-      service: "@growthos/api"
-    })
+      service: "@growthos/api",
+    }),
   );
 
   app.post("/v1/motions/score", async (c) => {
@@ -54,8 +62,14 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
     return c.json(result, 202);
   });
 
-  app.route("/v1/commands", createCommandRoutes({ outboxRepository: resolveOutboxRepository(deps) }));
-  app.route("/v1/paperclip", createPaperclipRoutes({ paperclipClient: resolvePaperclipClient(deps) }));
+  app.route(
+    "/v1/commands",
+    createCommandRoutes({ outboxRepository: resolveOutboxRepository(deps) }),
+  );
+  app.route(
+    "/v1/paperclip",
+    createPaperclipRoutes({ paperclipClient: resolvePaperclipClient(deps) }),
+  );
 
   return app;
 };

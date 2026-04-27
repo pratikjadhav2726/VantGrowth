@@ -13,7 +13,7 @@ describe("scoreMotions", () => {
       categorySearchDemand: 0.9,
       communityDensity: 0.7,
       telemetryReadiness: 0.6,
-      budgetReadiness: 0.5
+      budgetReadiness: 0.5,
     });
 
     expect(result.scorerVersion).toBe("motion_scorer.v1");

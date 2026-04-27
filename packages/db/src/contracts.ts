@@ -12,7 +12,7 @@ export const enqueueOutboxEventSchema = z.object({
   tenantId: tenantIdSchema,
   eventType: outboxEventTypeSchema,
   idempotencyKey: z.string().min(1),
-  payload: z.record(z.unknown())
+  payload: z.record(z.unknown()),
 });
 
 export type EnqueueOutboxEvent = z.infer<typeof enqueueOutboxEventSchema>;
@@ -20,7 +20,7 @@ export type EnqueueOutboxEvent = z.infer<typeof enqueueOutboxEventSchema>;
 export const storedOutboxEventSchema = enqueueOutboxEventSchema.extend({
   id: z.string().min(1),
   createdAt: z.date(),
-  consumedAt: z.date().nullable()
+  consumedAt: z.date().nullable(),
 });
 
 export type StoredOutboxEvent = z.infer<typeof storedOutboxEventSchema>;
@@ -29,7 +29,7 @@ export const approvalFeedbackActionSchema = z.enum([
   "approved",
   "edited_then_approved",
   "rejected",
-  "auto_approved"
+  "auto_approved",
 ]);
 
 export const createApprovalFeedbackSchema = z.object({
@@ -40,7 +40,9 @@ export const createApprovalFeedbackSchema = z.object({
   editDistance: z.number().min(0).max(1).nullable().optional(),
   rubricFailures: z.array(z.string().min(1)).default([]),
   reviewerNote: z.string().optional(),
-  learnOptIn: z.boolean().default(true)
+  learnOptIn: z.boolean().default(true),
 });
 
-export type CreateApprovalFeedback = z.input<typeof createApprovalFeedbackSchema>;
+export type CreateApprovalFeedback = z.input<
+  typeof createApprovalFeedbackSchema
+>;

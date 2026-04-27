@@ -8,7 +8,7 @@ export const motionTypeSchema = z.enum([
   "partners",
   "paid",
   "plg",
-  "abm"
+  "abm",
 ]);
 
 export type MotionType = z.infer<typeof motionTypeSchema>;
@@ -23,7 +23,7 @@ export const motionScoringInputSchema = z.object({
   categorySearchDemand: z.number().min(0).max(1),
   communityDensity: z.number().min(0).max(1),
   telemetryReadiness: z.number().min(0).max(1),
-  budgetReadiness: z.number().min(0).max(1)
+  budgetReadiness: z.number().min(0).max(1),
 });
 
 export type MotionScoringInput = z.infer<typeof motionScoringInputSchema>;
@@ -33,7 +33,7 @@ export const motionScoreResultSchema = z.object({
   scores: z.record(motionTypeSchema, z.number().min(0).max(1)),
   selectedPrimary: z.array(motionTypeSchema),
   selectedSecondary: z.array(motionTypeSchema),
-  rationale: z.array(z.string())
+  rationale: z.array(z.string()),
 });
 
 export type MotionScoreResult = z.infer<typeof motionScoreResultSchema>;
@@ -74,13 +74,25 @@ export const scoreMotions = (input: MotionScoringInput): MotionScoreResult => {
     community_engagement: clamp01(community),
     outbound_multichannel: clamp01(outbound),
     lifecycle_expansion: clamp01(lifecycle),
-    partners: clamp01(0.4 * input.acvBand + 0.3 * input.productComplexity + 0.3 * input.communityDensity),
-    paid: clamp01(0.5 * input.budgetReadiness + 0.2 * input.categorySearchDemand + 0.3 * input.trialability),
+    partners: clamp01(
+      0.4 * input.acvBand +
+        0.3 * input.productComplexity +
+        0.3 * input.communityDensity,
+    ),
+    paid: clamp01(
+      0.5 * input.budgetReadiness +
+        0.2 * input.categorySearchDemand +
+        0.3 * input.trialability,
+    ),
     plg: clamp01(0.6 * input.trialability + 0.4 * input.telemetryReadiness),
-    abm: clamp01(0.6 * input.acvBand + 0.4 * clamp01(input.salesCycleWeeks / 10))
+    abm: clamp01(
+      0.6 * input.acvBand + 0.4 * clamp01(input.salesCycleWeeks / 10),
+    ),
   };
 
-  const ordered = (Object.entries(scoreMap) as Array<[MotionType, number]>).sort((a, b) => b[1] - a[1]);
+  const ordered = (
+    Object.entries(scoreMap) as Array<[MotionType, number]>
+  ).sort((a, b) => b[1] - a[1]);
 
   return motionScoreResultSchema.parse({
     scorerVersion: "motion_scorer.v1",
@@ -89,8 +101,8 @@ export const scoreMotions = (input: MotionScoringInput): MotionScoreResult => {
     selectedSecondary: ordered.slice(2, 4).map(([motion]) => motion),
     rationale: [
       "Scores are deterministic and version-stamped for replayability.",
-      "Primary motions are selected by highest weighted fit to current tenant signals."
-    ]
+      "Primary motions are selected by highest weighted fit to current tenant signals.",
+    ],
   });
 };
 
@@ -98,7 +110,7 @@ export const eventOutboxCommandSchema = z.object({
   tenantId: z.string().min(1),
   eventType: z.string().min(1),
   idempotencyKey: z.string().min(1),
-  payload: z.record(z.any())
+  payload: z.record(z.any()),
 });
 
 export type EventOutboxCommand = z.infer<typeof eventOutboxCommandSchema>;

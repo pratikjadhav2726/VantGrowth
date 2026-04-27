@@ -40,6 +40,15 @@ pnpm dev
 - `packages/design-system`: initial token set.
 - `packages/test-utils`: shared fixtures.
 - `apps/worker-signal-router`: Signal Router worker with Postgres outbox + NATS JetStream publisher.
+- `apps/infra-smoke`: opt-in live Postgres/NATS smoke check.
+
+## Live infrastructure smoke
+
+After applying `packages/db/migrations/0001_growthos_core.sql` to Postgres and creating a JetStream stream that accepts `growthos.*.infra_smoke.v1`, run:
+
+```bash
+DATABASE_URL=postgres://... NATS_SERVERS=nats://localhost:4222 pnpm smoke:infra
+```
 
 ## First implemented endpoints
 

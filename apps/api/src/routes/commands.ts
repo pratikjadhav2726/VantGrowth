@@ -12,7 +12,9 @@ export const createCommandRoutes = (deps: CommandRouteDependencies): Hono => {
 
   route.post("/outbox", async (c) => {
     if (!deps.outboxRepository) {
-      throw new ServiceUnavailableError("Outbox repository is not configured. Set DATABASE_URL.");
+      throw new ServiceUnavailableError(
+        "Outbox repository is not configured. Set DATABASE_URL.",
+      );
     }
 
     const payload = eventOutboxCommandSchema.parse(await c.req.json());
@@ -24,9 +26,9 @@ export const createCommandRoutes = (deps: CommandRouteDependencies): Hono => {
         trackingId: `${event.tenantId}:${event.idempotencyKey}`,
         eventId: event.id,
         eventType: event.eventType,
-        enqueuedAt: event.createdAt.toISOString()
+        enqueuedAt: event.createdAt.toISOString(),
       },
-      202
+      202,
     );
   });
 
