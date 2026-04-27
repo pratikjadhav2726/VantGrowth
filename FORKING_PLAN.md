@@ -18,6 +18,22 @@ Use the following fork strategy so control-plane and runtime responsibilities st
    - Why: governed MCP tool runtime, tool entitlements, DLP, response caching, proxy exploration.
    - Start with deployment + configuration before code patching.
 
+## 1.1) Local workspace setup (now that fork is present)
+
+- Paperclip fork path (local): `../paperclip` from this repo root.
+- Keep repos separate (no git submodule required at this stage).
+- Recommended branch defaults in the Paperclip fork:
+  - `growthos/main` (integration branch for GrowthOS deltas)
+  - `growthos/upstream-sync` (weekly merge from upstream)
+
+### Local integration contract
+
+- GrowthOS domain code (this repo) calls Paperclip over HTTP/MCP only.
+- Do not import Paperclip source files directly into this monorepo.
+- Share identifiers through contracts:
+  - `tenant_id` in GrowthOS == `company.id` in Paperclip
+  - `run_id` correlation propagated across API, workers, SmarterMCP, and Paperclip
+
 ## 2) Keep in this repo (do not put in Paperclip fork)
 
 - Motion Engine
@@ -50,3 +66,15 @@ Use the following fork strategy so control-plane and runtime responsibilities st
 - `packages/skills`: runtime parsing/loading for skill manifests and bodies.
 - `packages/design-system`: UI design tokens/primitives starter.
 - `packages/test-utils`: shared test fixtures and helpers.
+
+## 5) First integration tasks with local Paperclip fork
+
+1. Add environment variables in GrowthOS for Paperclip base URL + service token.
+2. Implement Paperclip client port in `packages/adapter`:
+   - create company
+   - create/wakeup agent
+   - create/update issue
+   - checkout/release issue
+   - status: implemented as typed `PaperclipClient` in `packages/adapter`
+3. Add contract tests for Paperclip API payload schemas in this repo.
+4. Keep fork-specific DB/migration changes inside `../paperclip`.

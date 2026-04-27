@@ -11,14 +11,35 @@ pnpm dev
 
 API service defaults to `http://localhost:3001`.
 
+## Local multi-repo setup
+
+- GrowthOS repo: current directory
+- Paperclip fork repo: `../paperclip`
+
+Run both in parallel during integration:
+
+```bash
+# Terminal 1 (Paperclip)
+cd ../paperclip
+pnpm install
+pnpm dev
+
+# Terminal 2 (GrowthOS)
+cd ../GTM
+pnpm install
+pnpm dev
+```
+
 ## Current modules
 
 - `apps/api`: Hono API with async command acceptance pattern.
 - `packages/core`: domain schemas + deterministic motion scoring.
+- `packages/db`: database contracts, core migration baseline, tenant helpers, outbox repository.
 - `packages/adapter`: `growthos_native` adapter contract starter.
 - `packages/skills`: skill frontmatter/body parser + loader.
 - `packages/design-system`: initial token set.
 - `packages/test-utils`: shared fixtures.
+- `apps/worker-signal-router`: Signal Router worker with Postgres outbox + NATS JetStream publisher.
 
 ## First implemented endpoints
 

@@ -109,6 +109,80 @@ Each phase has a sharp exit criterion. Do not begin the next phase until the cur
 
 ---
 
+## 2.1 Current implementation snapshot (updated)
+
+This section tracks what is already implemented in the `GTM` repo so execution status is explicit and not inferred from architecture docs.
+
+**Last updated:** 2026-04-27
+
+### Progress dashboard (implementation status)
+
+| Phase / Track | Status | Progress |
+|---|---|---:|
+| Phase 0 / Track A (Repo + tooling) | In progress, strong foundation complete | 70% |
+| Phase 0 / Track B (Data plane) | In progress (core schema baseline + contracts started) | 15% |
+| Phase 0 / Track C (Event + workflow plane) | In progress (Postgres outbox + NATS publisher started) | 20% |
+| Phase 0 / Track D (LLM + harness infra) | Not started | 0% |
+| Phase 0 / Track E (Identity/billing/secrets/deploy) | Not started | 0% |
+| Phase 0 / Track F (Paperclip fork hardening) | Fork present, hardening not complete | 20% |
+| Phase 1 / S1 (Adapter + tenant provisioning starter) | In progress (adapter/API scaffolding complete) | 40% |
+| Phase 1 / S2 (Motion Engine starter) | In progress (deterministic scorer v1 starter complete) | 30% |
+| Phase 1 / S3-S6 (Agents/UI/learning loop) | Not started | 0% |
+
+### Completed in code (this repo)
+
+- **Phase 0 / Track A (Repo + tooling)**
+  - Monorepo scaffolded with `pnpm`, `turbo`, `typescript`, `biome`, `vitest`.
+  - Packages created: `@growthos/core`, `@growthos/api`, `@growthos/adapter`, `@growthos/skills`, `@growthos/design-system`, `@growthos/test-utils`.
+  - Workspace validation commands are green (`pnpm typecheck`, `pnpm test`).
+- **Phase 1 / S2 Domain starter**
+  - Deterministic `Motion Engine` starter implemented in `@growthos/core` with versioned scorer output and tests.
+- **Phase 0 / Track B Data-plane starter**
+  - `@growthos/db` package added.
+  - Core SQL migration baseline added for `motion_scores`, `motion_stack`, `approval_feedback`, and `event_outbox`.
+  - RLS policies and idempotency constraint included in migration contract.
+  - Typed outbox contracts, tenant context helpers, and in-memory outbox repository implemented with tests.
+  - Real Postgres outbox repository implemented with transaction-local RLS context and idempotent insert/load behavior.
+- **Phase 0 / Track C Event-plane starter**
+  - `@growthos/worker-signal-router` app added.
+  - Real NATS JetStream publisher implemented using the `nats` client.
+  - Signal Router service implemented with deterministic stage-1 classification, outbox enqueue, and tenant-scoped NATS publishing.
+  - Worker tests cover routing, duplicate signal idempotency, and JetStream publish boundary.
+- **Phase 1 / S1 Adapter starter**
+  - `growthos_native` adapter contract scaffolded in `@growthos/adapter`.
+  - Typed `PaperclipClient` implemented (company, agent, issue, checkout, release, wakeup operations).
+  - Env-driven config parsing implemented (`PAPERCLIP_BASE_URL`, `PAPERCLIP_SERVICE_TOKEN`, `PAPERCLIP_TIMEOUT_MS`).
+- **Phase 1 API foundation**
+  - API app factory + server bootstrap separation implemented.
+  - Endpoints implemented:
+    - `GET /health`
+    - `POST /v1/motions/score`
+    - `POST /v1/commands/outbox`
+    - `POST /v1/paperclip/bootstrap-tenant`
+  - `/v1/commands/outbox` now persists through the configured `OutboxRepository`; production resolves to Postgres via `DATABASE_URL`.
+  - `Idempotency-Key` support implemented on tenant bootstrap route.
+  - Centralized error mapping implemented (validation -> `400`, service unavailable -> `503`, fallback -> `500`).
+- **Testing implemented as part of delivery**
+  - Unit tests for motion scoring and adapter client.
+  - Route-level API tests including bootstrap success/failure, idempotency behavior, validation error mapping, and fetch-mocked integration path.
+
+### In progress / not yet implemented
+
+- **Phase 0 / Track B** data plane provisioning and migrations (`Drizzle`, `Atlas`, Postgres schemas) not yet implemented.
+- **Phase 0 / Track C** durable event/workflow plane (`NATS JetStream`, `Restate`, outbox publisher) not yet implemented.
+- **Phase 0 / Track D/E** LLM gateway deployment, secrets, identity, billing, and GitOps deploy tracks not yet implemented.
+- **Phase 0 / Track F** Paperclip fork hardening deltas (RLS, scheduler migration, LiveEvents replacement) are not yet merged/verified in the fork.
+- **Phase 1 agents/workers/UI** (Intel/Inbound/Reporting, critique worker, approval queue UI, weekly review) not yet implemented.
+
+### Active next milestones (execution order)
+
+1. Implement `growthos` schema migrations + repository layer (Postgres/Drizzle).
+2. Implement first async workers (`worker-signal-router`, `worker-critique`) with idempotent job contracts.
+3. Start Paperclip fork hardening branch execution (RLS + scheduler + live-events), then run integration smoke.
+4. Add live infrastructure smoke tests for Postgres + NATS once local services are running.
+
+---
+
 ## 3. Phase 0 — Foundations (weeks −2 → 0)
 
 **Goal:** every infrastructure component a future engineer will rely on exists, is observable, and has a runbook. No domain code yet.
