@@ -115,6 +115,8 @@ export const eventOutboxCommandSchema = z.object({
 
 export type EventOutboxCommand = z.infer<typeof eventOutboxCommandSchema>;
 
+export * from "./handoff-contracts.js";
 export * from "./restate-client.js";
+export * from "./tenant-provisioning.js";
 export * from "./workflow-state.js";
 export * from "./workflows.js";

@@ -186,10 +186,10 @@ pnpm dev
 
 - `packages/observability`: `@growthos/observability` — OpenTelemetry + pino logging scaffolding. Exports `getTracer()`, `getMeter()`, `createStandardMetrics()`, `createLogger()`, `initOtelSdk()`, `createHttpMiddleware()`, plus re-exports `SpanKind`, `SpanStatusCode`, `context`, `trace` from `@opentelemetry/api` so consumers need no direct OTel dep. SDK init is no-op when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset. See **Observability** section below.
 - `apps/api`: Hono API with async command acceptance pattern. Mounts OTel middleware (`createHttpMiddleware`) on every route; SDK initialised at startup via `initOtelSdk("growthos.api")`; structured pino logger replaces all `console.*` calls.
-- `packages/core`: domain schemas + deterministic motion scoring.
+- `packages/core`: domain schemas + deterministic motion scoring + **handoff contracts v0** (`intel_brief.v1`, `content_opportunity.v1`, `content_brief.v1`, `blog_draft.v1` Zod schemas with registry + dispatcher) + **`TenantProvisioningOrchestrator`** (5-step idempotent provisioning: Paperclip company → Gitea workspace repo → NATS consumer group → MinIO bucket → seed `FOUNDER.md`) with typed client interfaces and stub implementations.
 - `packages/db`: Drizzle ORM schema (`src/schema.ts`), drizzle-kit migrations (`drizzle/` + **`atlas.sum`** / **`atlas.hcl`** for Atlas validate + lint), `pnpm migrate:dry-run` (bootstrap + apply + table checks, same as CI), `pnpm atlas:validate` / `pnpm atlas:lint`, typed Postgres repositories, tenant helpers, outbox + workflow run repositories. Includes **generated RLS invariant tests** (`src/rls-test-generator.ts` + `src/rls-invariants.test.ts`) — all 5 tenant-scoped tables verified for owner/other/no-context isolation; skipped unless `DATABASE_URL` is set.
 - `packages/adapter`: `growthos_native` adapter contract starter.
-- `packages/skills`: skill frontmatter/body parser + loader.
+- `packages/skills`: skill frontmatter/body parser + loader. **Skills library v0** at `packages/skills/library/`: `base/founder_voice.md`, `base/brand_rules.md`, `base/claims_handling.md`, `inbound/content_strategist.md`, `intel/intel_director.md` — each with validated YAML frontmatter and production-quality agent instructions.
 - `packages/design-system`: initial token set.
 - `packages/test-utils`: shared fixtures.
 - `apps/worker-signal-router`: Signal Router worker with Postgres outbox + NATS JetStream publisher. OTel SDK + pino logger wired.
