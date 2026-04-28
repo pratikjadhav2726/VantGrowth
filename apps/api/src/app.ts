@@ -14,11 +14,19 @@ import {
   type WorkflowRunRepository,
   createDbFromEnv,
 } from "@growthos/db";
+import {
+  createHttpMiddleware,
+  createLogger,
+  getMeter,
+  getTracer,
+} from "@growthos/observability";
 import { Hono } from "hono";
 import { mapErrorToResponse } from "./error-middleware.js";
 import { createCommandRoutes } from "./routes/commands.js";
 import { createPaperclipRoutes } from "./routes/paperclip.js";
 import { createWorkflowRoutes } from "./routes/workflows.js";
+
+export const log = createLogger("growthos.api");
 
 export interface AppDependencies {
   paperclipClient?: PaperclipClientPort;
@@ -82,12 +90,21 @@ const resolveRuntimeCallbackSecret = (deps: AppDependencies): string | null =>
 
 export const createApp = (deps: AppDependencies = {}): Hono => {
   const app = new Hono();
+
+  // ── Observability middleware (spans + metrics on every request) ────────────
+  // No-op when OTel SDK has not been initialised (unit tests, local dev).
+  app.use(
+    "*",
+    createHttpMiddleware(getTracer("growthos.api"), getMeter("growthos.api")),
+  );
+
   app.onError((error, c) => mapErrorToResponse(error, c));
 
   app.get("/health", (c) =>
     c.json({
       ok: true,
       service: "@growthos/api",
+      version: process.env.npm_package_version ?? "0.1.0",
     }),
   );
 

@@ -6,9 +6,14 @@
 // Requires Atlas CLI v1.x (https://atlasgo.io/getting-started#installation).
 
 env "growthos" {
+  # Apply target: atlas migrate apply --env growthos
+  # Requires DATABASE_URL to be set in the shell environment.
+  url = getenv("DATABASE_URL")
+
   migration {
     dir = "file://drizzle"
   }
+
   lint {
     destructive {
       error = true

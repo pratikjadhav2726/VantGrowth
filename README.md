@@ -63,27 +63,50 @@ If `ATLAS_LINT_DEV_URL` is unset, `db:atlas-lint` defaults to `docker://postgres
 
 ### Local infra (Docker Compose)
 
-[`compose.yaml`](compose.yaml) starts **Postgres 16** and **NATS JetStream** on non-default host ports (so they do not collide with a local Postgres/NATS on 5432/4222). A one-shot **`jetstream-init`** service creates the **`GROWTHOS`** stream with subjects **`t.>`** when it does not already exist (matches `infra-smoke` + outbox publisher).
+[`compose.yaml`](compose.yaml) starts the full Phase-0 data and event plane on non-default host ports (no collision with local services):
+
+| Service | Purpose | Host port(s) |
+|---|---|---|
+| `postgres` | Postgres 16 | **5488** |
+| `nats` + `jetstream-init` | NATS JetStream + `GROWTHOS` stream | **4228** (client) / **8228** (monitor) |
+| `valkey` | Valkey 8 (Redis-compatible cache) | **6388** |
+| `minio` + `minio-init` | MinIO S3-compatible store (buckets: `growthos`, `growthos-assets`) | **9088** (S3 API) / **9089** (console) |
+| `clickhouse` | ClickHouse 24 (analytics: `growthos` DB auto-created) | **8124** (HTTP) / **9010** (native) |
+| `meilisearch` | Meilisearch v1.11 (full-text / vector search) | **7701** |
 
 ```bash
 pnpm infra:up          # docker compose up -d
 pnpm infra:ps          # container status
-pnpm infra:down        # stop and remove volumes (wipes DB + JetStream data)
+pnpm infra:down        # stop and remove volumes (wipes all data)
 ```
 
-After `infra:up` is healthy:
-
-- Postgres: `postgresql://postgres:postgres@127.0.0.1:5488/growthos_ci`
-- NATS: `nats://127.0.0.1:4228` (monitoring UI on host port **8228**)
+After `infra:up` is healthy, apply migrations + seed a dev tenant:
 
 ```bash
-DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5488/growthos_ci pnpm migrate:dry-run
-DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5488/growthos_ci \
-  NATS_SERVERS=nats://127.0.0.1:4228 \
-  pnpm smoke:infra
+export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5488/growthos_ci
+
+# Apply bootstrap SQL + Drizzle migration (same path as CI)
+pnpm migrate:dry-run
+
+# OR use Atlas for an explicit apply (requires Atlas CLI on PATH):
+pnpm migrate:apply
+
+# Seed well-known dev tenant (idempotent)
+NATS_SERVERS=nats://127.0.0.1:4228 pnpm seed:dev
+
+# Verify outbox drain + JetStream publish
+NATS_SERVERS=nats://127.0.0.1:4228 pnpm smoke:infra
 ```
 
-If `jetstream-init` exits non-zero, inspect logs: `docker compose -f compose.yaml logs jetstream-init`.
+Env overrides for `seed:dev`:
+
+| Var | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | required | Postgres connection string |
+| `GROWTHOS_DEV_TENANT_ID` | `00000000-0000-0000-0001-000000000001` | Well-known dev tenant UUID |
+| `NATS_SERVERS` | _(unset — Postgres only)_ | Publish seed event to JetStream |
+
+If a service exits non-zero, inspect logs: `docker compose -f compose.yaml logs <service>`.
 
 ## Local multi-repo setup
 
@@ -134,18 +157,29 @@ pnpm dev
 
 ## Live infrastructure smoke
 
-1. Apply Drizzle migrations to Postgres (from `packages/db`):
+1. Apply Drizzle migrations to Postgres.  Two supported paths:
 
+   **Option A — `migrate:dry-run`** (used in CI and local dev):
    ```bash
-   pnpm --filter @growthos/db db:generate   # when schema changes
-   pnpm --filter @growthos/db db:migrate   # apply migrations (requires DATABASE_URL)
+   DATABASE_URL=... pnpm migrate:dry-run
    ```
 
-   Migration SQL lives under `packages/db/drizzle/` (e.g. `0000_yielding_inertia.sql`). If you apply SQL with `psql -f` instead of `drizzle-kit migrate`, run `packages/db/ci/bootstrap.sql` first so `growthos` and `pgcrypto` exist (CI uses the same order).
+   **Option B — `atlas migrate apply`** (production apply, requires Atlas on `PATH`):
+   ```bash
+   DATABASE_URL=... pnpm migrate:apply
+   ```
 
-2. Ensure a JetStream stream accepts **worker-style** subjects (`t.<tenant_uuid>.growthos.infra_smoke.v1`, from `tenantScopedSubject`). Either use **`pnpm infra:up`** (creates stream **`GROWTHOS`** with `t.>`) or configure your broker manually with a filter such as `t.>`.
+   Migration SQL lives under `packages/db/drizzle/`. If you apply with `psql -f` directly, run `packages/db/ci/bootstrap.sql` first (`growthos` schema + `pgcrypto`).
 
-3. Run smoke:
+2. Seed a dev tenant (idempotent):
+
+   ```bash
+   DATABASE_URL=... [NATS_SERVERS=...] pnpm seed:dev
+   ```
+
+3. Ensure a JetStream stream accepts **worker-style** subjects (`t.<tenant_uuid>.growthos.infra_smoke.v1`, from `tenantScopedSubject`). Either use **`pnpm infra:up`** (creates stream **`GROWTHOS`** with `t.>`) or configure your broker manually with a filter such as `t.>`.
+
+4. Run smoke:
 
    ```bash
    DATABASE_URL=postgres://... NATS_SERVERS=nats://localhost:4222 pnpm smoke:infra

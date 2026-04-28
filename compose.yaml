@@ -1,15 +1,24 @@
-# Local stack for GrowthOS Phase-0 checks: Postgres + NATS JetStream with GROWTHOS stream.
-# Host ports avoid clashing with common local Postgres (5432) / NATS (4222).
+# Local stack for GrowthOS Phase-0 checks.
+# Host ports are deliberately offset from common defaults to avoid collisions:
+#   Postgres     5488  (default 5432)
+#   NATS         4228 / 8228  (default 4222 / 8222)
+#   Valkey       6388  (default 6379)
+#   MinIO S3     9088 / console 9089  (default 9000 / 9001)
+#   ClickHouse   8124 (HTTP) / 9010 (native)  (default 8123 / 9000)
+#   Meilisearch  7701  (default 7700)
 #
-# Usage:
+# Quick start:
 #   pnpm infra:up
 #   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5488/growthos_ci pnpm migrate:dry-run
+#   DATABASE_URL=... pnpm seed:dev
 #   DATABASE_URL=... NATS_SERVERS=nats://127.0.0.1:4228 pnpm smoke:infra
 #   pnpm infra:down
 
 name: growthos-local
 
 services:
+
+  # ── Postgres ──────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     environment:
@@ -27,40 +36,186 @@ services:
     volumes:
       - growthos-postgres-data:/var/lib/postgresql/data
 
+  # ── NATS JetStream ────────────────────────────────────────────────────────
   nats:
     image: nats:2.10-alpine
     command: ["-js", "-sd", "/data", "-m", "8222"]
     ports:
       - "4228:4222"
       - "8228:8222"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz | grep -q ok"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
     volumes:
       - growthos-nats-js:/data
 
   jetstream-init:
     image: natsio/nats-box:0.14.5
     depends_on:
-      - nats
+      nats:
+        condition: service_healthy
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -eu
         NATS_URL="nats://nats:4222"
-        sleep 2
-        for i in $$(seq 1 60); do
+        for i in $$(seq 1 30); do
           if nats --server "$$NATS_URL" stream info GROWTHOS >/dev/null 2>&1; then
             echo "JetStream stream GROWTHOS already exists."
             exit 0
           fi
-          if nats --server "$$NATS_URL" stream add GROWTHOS --subjects "t.>" --defaults; then
+          if nats --server "$$NATS_URL" stream add GROWTHOS --subjects "t.>" --defaults 2>/dev/null; then
             echo "Created JetStream stream GROWTHOS (subjects: t.>)."
             exit 0
           fi
           sleep 1
         done
-        echo "Timed out waiting for NATS / stream creation."
-        exit 1
+        echo "Timed out waiting for NATS / stream creation." && exit 1
+
+  # ── Valkey (Redis-compatible cache) ───────────────────────────────────────
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports:
+      - "6388:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    volumes:
+      - growthos-valkey-data:/data
+
+  # ── MinIO (S3-compatible object store) ────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    command: server /data --console-address ":9001"
+    ports:
+      - "9088:9000"
+      - "9089:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local 2>/dev/null || wget -qO- http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - growthos-minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-12-17T17-25-30Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mc alias set local http://minio:9000 minio miniosecret
+        mc mb local/growthos --ignore-existing
+        mc mb local/growthos-assets --ignore-existing
+        echo "MinIO buckets ready."
+
+  # ── ClickHouse (analytics store) ──────────────────────────────────────────
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    environment:
+      CLICKHOUSE_DB: growthos
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8124:8123"
+      - "9010:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:8123/ping' | grep -q Ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - growthos-clickhouse-data:/var/lib/clickhouse
+      - ./packages/db/clickhouse:/docker-entrypoint-initdb.d:ro
+
+  # ── Qdrant (vector store — per-tenant memory + embeddings) ───────────────
+  qdrant:
+    image: qdrant/qdrant:v1.12.0
+    ports:
+      - "6343:6333"   # HTTP / gRPC-web
+      - "6344:6334"   # gRPC
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:6333/readyz' | grep -q ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - growthos-qdrant-data:/qdrant/storage
+
+  # ── Gitea (per-tenant workspace repos) ────────────────────────────────────
+  gitea:
+    image: gitea/gitea:1.22-rootless
+    environment:
+      GITEA__APP_NAME: "GrowthOS Dev"
+      GITEA__DEFAULT_BRANCH: main
+      GITEA__REPOSITORY__DEFAULT_BRANCH: main
+      GITEA__SERVER__HTTP_PORT: "3000"
+      GITEA__SERVER__SSH_PORT: "22"
+      GITEA__SERVER__DOMAIN: "localhost"
+      GITEA__SERVER__ROOT_URL: "http://localhost:3088/"
+      GITEA__DATABASE__DB_TYPE: sqlite3
+      GITEA__SECURITY__INSTALL_LOCK: "true"
+      GITEA__SECURITY__SECRET_KEY: "growthos-dev-secret-key-change-in-prod"
+      GITEA__SECURITY__INTERNAL_TOKEN: "growthos-dev-internal-token-change-in-prod"
+    ports:
+      - "3088:3000"
+      - "2222:2222"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:3000/api/healthz' | grep -q 'gitea is healthy'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    volumes:
+      - growthos-gitea-data:/var/lib/gitea
+      - growthos-gitea-config:/etc/gitea
+
+  # ── Meilisearch (full-text / vector search) ───────────────────────────────
+  meilisearch:
+    image: getmeili/meilisearch:v1.11
+    environment:
+      MEILI_ENV: development
+      MEILI_MASTER_KEY: growthos-dev-key
+    ports:
+      - "7701:7700"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:7700/health' | grep -q available"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - growthos-meili-data:/meili_data
 
 volumes:
   growthos-postgres-data:
   growthos-nats-js:
+  growthos-valkey-data:
+  growthos-minio-data:
+  growthos-clickhouse-data:
+  growthos-qdrant-data:
+  growthos-gitea-data:
+  growthos-gitea-config:
+  growthos-meili-data:

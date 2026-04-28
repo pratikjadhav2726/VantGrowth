@@ -12,6 +12,8 @@
     "migrate:dry-run": "pnpm --filter @growthos/db migrate:dry-run",
     "atlas:validate": "pnpm --filter @growthos/db db:atlas-validate",
     "atlas:lint": "pnpm --filter @growthos/db db:atlas-lint",
+    "migrate:apply": "pnpm --filter @growthos/db db:migrate-apply",
+    "seed:dev": "pnpm --filter @growthos/db db:seed-dev",
     "infra:up": "docker compose -f compose.yaml up -d",
     "infra:down": "docker compose -f compose.yaml down -v",
     "infra:ps": "docker compose -f compose.yaml ps",

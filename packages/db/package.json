@@ -16,7 +16,9 @@
     "migrate:dry-run": "tsx src/migrate-dry-run-cli.ts",
     "db:atlas-hash": "atlas migrate hash --env growthos",
     "db:atlas-validate": "atlas migrate validate --env growthos",
-    "db:atlas-lint": "atlas migrate lint --env growthos --latest 1 --dev-url \"${ATLAS_LINT_DEV_URL:-docker://postgres/16/dev?search_path=public}\""
+    "db:atlas-lint": "atlas migrate lint --env growthos --latest 1 --dev-url \"${ATLAS_LINT_DEV_URL:-docker://postgres/16/dev?search_path=public}\"",
+    "db:migrate-apply": "atlas migrate apply --env growthos",
+    "db:seed-dev": "tsx src/seed-dev-cli.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
