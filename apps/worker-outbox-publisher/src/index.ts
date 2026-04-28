@@ -1,4 +1,4 @@
-import { PostgresOutboxRepository, createPgPoolFromEnv } from "@growthos/db";
+import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
 import {
   PostgresCycleLeaseGuard,
   cycleLeaseConfigFromEnv,
@@ -13,7 +13,7 @@ export const createOutboxPublisherFromEnv = async (): Promise<{
   runtimeConfig: ReturnType<typeof runtimeConfigFromEnv>;
   close: () => Promise<void>;
 }> => {
-  const outboxRepository = new PostgresOutboxRepository(createPgPoolFromEnv(), {
+  const outboxRepository = new PostgresOutboxRepository(createDbFromEnv(), {
     actorKind: "system",
   });
   const eventPublisher = await NatsJetStreamPublisher.connect();
@@ -62,7 +62,7 @@ export const startOutboxPublisherLoop = (
 if (process.env.WORKER_BOOTSTRAP === "true") {
   const { publisher, runtimeConfig } = await createOutboxPublisherFromEnv();
   const leaseGuard = new PostgresCycleLeaseGuard(
-    createPgPoolFromEnv(),
+    createDbFromEnv(),
     cycleLeaseConfigFromEnv(),
   );
   const notifier =

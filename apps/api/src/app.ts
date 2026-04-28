@@ -10,7 +10,9 @@ import {
 import {
   type OutboxRepository,
   PostgresOutboxRepository,
-  createPgPoolFromEnv,
+  PostgresWorkflowRunRepository,
+  type WorkflowRunRepository,
+  createDbFromEnv,
 } from "@growthos/db";
 import { Hono } from "hono";
 import { mapErrorToResponse } from "./error-middleware.js";
@@ -21,6 +23,7 @@ import { createWorkflowRoutes } from "./routes/workflows.js";
 export interface AppDependencies {
   paperclipClient?: PaperclipClientPort;
   outboxRepository?: OutboxRepository;
+  workflowRunRepository?: WorkflowRunRepository;
   restateWorkflowClient?: RestateWorkflowClientPort;
   runtimeCallbackSecret?: string;
 }
@@ -49,7 +52,18 @@ const resolveOutboxRepository = (
   if (deps.outboxRepository) return deps.outboxRepository;
   if (!process.env.DATABASE_URL) return null;
 
-  return new PostgresOutboxRepository(createPgPoolFromEnv(), {
+  return new PostgresOutboxRepository(createDbFromEnv(), {
+    actorKind: "system",
+  });
+};
+
+const resolveWorkflowRunRepository = (
+  deps: AppDependencies,
+): WorkflowRunRepository | null => {
+  if (deps.workflowRunRepository) return deps.workflowRunRepository;
+  if (!process.env.DATABASE_URL) return null;
+
+  return new PostgresWorkflowRunRepository(createDbFromEnv(), {
     actorKind: "system",
   });
 };
@@ -95,6 +109,7 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
     "/v1/workflows",
     createWorkflowRoutes({
       outboxRepository: resolveOutboxRepository(deps),
+      workflowRunRepository: resolveWorkflowRunRepository(deps),
       restateWorkflowClient: resolveRestateWorkflowClient(deps),
       runtimeCallbackSecret: resolveRuntimeCallbackSecret(deps),
     }),

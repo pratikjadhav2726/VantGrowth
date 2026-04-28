@@ -1,9 +1,9 @@
-import { PostgresOutboxRepository, createPgPoolFromEnv } from "@growthos/db";
+import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
 import { NatsJetStreamPublisher } from "./nats-publisher.js";
 import { SignalRouter } from "./signal-router.js";
 
 export const createSignalRouterFromEnv = async (): Promise<SignalRouter> => {
-  const outboxRepository = new PostgresOutboxRepository(createPgPoolFromEnv(), {
+  const outboxRepository = new PostgresOutboxRepository(createDbFromEnv(), {
     actorKind: "system",
   });
   const eventPublisher = await NatsJetStreamPublisher.connect();

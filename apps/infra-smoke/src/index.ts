@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { PostgresOutboxRepository } from "@growthos/db";
+import { PostgresOutboxRepository, createDb } from "@growthos/db";
 import { JSONCodec, connect } from "nats";
-import pg from "pg";
 import { z } from "zod";
-
-const { Pool } = pg;
 
 const smokeEnvSchema = z.object({
   DATABASE_URL: z.string().url(),
@@ -17,10 +14,7 @@ const smokeEnvSchema = z.object({
 
 const main = async () => {
   const env = smokeEnvSchema.parse(process.env);
-  const pool = new Pool({
-    connectionString: env.DATABASE_URL,
-    max: 1,
-  });
+  const db = createDb({ connectionString: env.DATABASE_URL, poolMax: 1 });
 
   const nats = await connect({
     servers: env.NATS_SERVERS,
@@ -28,7 +22,7 @@ const main = async () => {
   });
 
   try {
-    const repository = new PostgresOutboxRepository(pool, {
+    const repository = new PostgresOutboxRepository(db, {
       actorKind: "system",
     });
     const smokeId = randomUUID();
@@ -74,7 +68,7 @@ const main = async () => {
     );
   } finally {
     await nats.drain();
-    await pool.end();
+    // db pool is drained when the process exits; no explicit end needed for smoke run
   }
 };
 

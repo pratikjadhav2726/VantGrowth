@@ -1,9 +1,9 @@
-import { PostgresOutboxRepository, createPgPoolFromEnv } from "@growthos/db";
+import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
 import { NatsJetStreamPublisher } from "./nats-publisher.js";
 import { WarmthWorker } from "./warmth-worker.js";
 
 export const createWarmthWorkerFromEnv = async (): Promise<WarmthWorker> => {
-  const outboxRepository = new PostgresOutboxRepository(createPgPoolFromEnv(), {
+  const outboxRepository = new PostgresOutboxRepository(createDbFromEnv(), {
     actorKind: "system",
   });
   const eventPublisher = await NatsJetStreamPublisher.connect();

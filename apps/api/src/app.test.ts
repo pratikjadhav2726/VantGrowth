@@ -1,7 +1,10 @@
 import { createHmac } from "node:crypto";
 import { PaperclipClient, type PaperclipClientPort } from "@growthos/adapter";
 import type { RestateWorkflowClientPort } from "@growthos/core";
-import { InMemoryOutboxRepository } from "@growthos/db";
+import {
+  InMemoryOutboxRepository,
+  InMemoryWorkflowRunRepository,
+} from "@growthos/db";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
 
@@ -270,6 +273,232 @@ describe("API app", () => {
     );
 
     expect(response.status).toBe(401);
+  });
+
+  it("upserts workflow run state on tenant-provisioning trigger", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const workflowRunRepository = new InMemoryWorkflowRunRepository();
+    const restateWorkflowClient: RestateWorkflowClientPort = {
+      startHelloWorkflow: vi.fn(async () => undefined),
+      startTenantProvisioningWorkflow: vi.fn(async () => undefined),
+    };
+    const app = createApp({
+      outboxRepository,
+      workflowRunRepository,
+      restateWorkflowClient,
+    });
+
+    await app.request("http://localhost/v1/workflows/tenant-provisioning", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tenantId,
+        workflowId: "wf-sm-1",
+        dedupeKey: "wf-sm-1",
+        tenantExternalId: "ten_sm_01",
+        tenantName: "Lattice",
+        requestedBy: "founder",
+      }),
+    });
+
+    const run = await workflowRunRepository.getByWorkflowId(
+      tenantId,
+      "wf-sm-1",
+    );
+    expect(run?.state).toBe("requested");
+    expect(run?.workflowId).toBe("wf-sm-1");
+  });
+
+  it("transitions workflow run state on completed callback", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const workflowRunRepository = new InMemoryWorkflowRunRepository();
+    const app = createApp({ outboxRepository, workflowRunRepository });
+
+    // Seed the run as requested
+    await workflowRunRepository.upsertRequested(tenantId, "wf-sm-2", "wf-sm-2");
+
+    const response = await app.request(
+      "http://localhost/v1/workflows/runtime-callbacks/tenant-provisioning",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenantId,
+          workflowId: "wf-sm-2",
+          dedupeKey: "wf-sm-2",
+          tenantExternalId: "ten_sm_02",
+          tenantName: "Lattice",
+          requestedBy: "founder",
+          callbackId: "cb-sm-2",
+          callbackType: "completed",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    const run = await workflowRunRepository.getByWorkflowId(
+      tenantId,
+      "wf-sm-2",
+    );
+    expect(run?.state).toBe("completed");
+  });
+
+  it("returns 409 when callback arrives on a terminal workflow run", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const workflowRunRepository = new InMemoryWorkflowRunRepository();
+    const app = createApp({ outboxRepository, workflowRunRepository });
+
+    // Seed and transition to completed
+    await workflowRunRepository.upsertRequested(tenantId, "wf-sm-3", "wf-sm-3");
+    await workflowRunRepository.transitionState(
+      tenantId,
+      "wf-sm-3",
+      "requested",
+      "completed",
+    );
+
+    // Attempt another completed callback — illegal transition
+    const response = await app.request(
+      "http://localhost/v1/workflows/runtime-callbacks/tenant-provisioning",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenantId,
+          workflowId: "wf-sm-3",
+          dedupeKey: "wf-sm-3",
+          tenantExternalId: "ten_sm_03",
+          tenantName: "Lattice",
+          requestedBy: "founder",
+          callbackId: "cb-sm-3b",
+          callbackType: "completed",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+  });
+
+  it("transitions workflow run to failed state on failed callback", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const workflowRunRepository = new InMemoryWorkflowRunRepository();
+    const app = createApp({ outboxRepository, workflowRunRepository });
+
+    await workflowRunRepository.upsertRequested(tenantId, "wf-sm-4", "wf-sm-4");
+
+    const response = await app.request(
+      "http://localhost/v1/workflows/runtime-callbacks/tenant-provisioning",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenantId,
+          workflowId: "wf-sm-4",
+          dedupeKey: "wf-sm-4",
+          tenantExternalId: "ten_sm_04",
+          tenantName: "Lattice",
+          requestedBy: "founder",
+          callbackId: "cb-sm-4",
+          callbackType: "failed",
+          failureCode: "TIMEOUT",
+          failureMessage: "Timed out after 60s",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    const run = await workflowRunRepository.getByWorkflowId(
+      tenantId,
+      "wf-sm-4",
+    );
+    expect(run?.state).toBe("failed");
+    expect(run?.failureCode).toBe("TIMEOUT");
+  });
+
+  it("routes progress-only callbacks — emits one progress event, no terminal event", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const app = createApp({ outboxRepository });
+    const callbackPayload = {
+      tenantId,
+      workflowId: "wf-provision-2",
+      dedupeKey: "wf-provision-2",
+      tenantExternalId: "ten_lat_02",
+      tenantName: "Lattice",
+      requestedBy: "founder",
+      callbackId: "cb-progress-1",
+      callbackType: "progress",
+      progressStep: "gitea.repo.created",
+      progressMessage: "Gitea workspace repo created",
+      progressPercent: 50,
+    };
+
+    const response = await app.request(
+      "http://localhost/v1/workflows/runtime-callbacks/tenant-provisioning/progress",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(callbackPayload),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    const payload = (await response.json()) as {
+      eventType: string;
+      callbackType: string;
+      targetState: string;
+    };
+    expect(payload.eventType).toBe("workflow.tenant_provisioning.progress.v1");
+    expect(payload.callbackType).toBe("progress");
+    expect(payload.targetState).toBe("in_progress");
+
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.eventType).toBe(
+      "workflow.tenant_provisioning.progress.v1",
+    );
+  });
+
+  it("routes failed callbacks — emits progress + failed events", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const app = createApp({ outboxRepository });
+    const callbackPayload = {
+      tenantId,
+      workflowId: "wf-provision-3",
+      dedupeKey: "wf-provision-3",
+      tenantExternalId: "ten_lat_03",
+      tenantName: "Lattice",
+      requestedBy: "founder",
+      callbackId: "cb-fail-1",
+      callbackType: "failed",
+      failureCode: "PROVISIONING_TIMEOUT",
+      failureMessage: "Provisioning timed out after 60s",
+    };
+
+    const response = await app.request(
+      "http://localhost/v1/workflows/runtime-callbacks/tenant-provisioning",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(callbackPayload),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    const payload = (await response.json()) as {
+      eventType: string;
+      callbackType: string;
+      targetState: string;
+    };
+    expect(payload.eventType).toBe("workflow.tenant_provisioning.failed.v1");
+    expect(payload.callbackType).toBe("failed");
+    expect(payload.targetState).toBe("failed");
+
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events).toHaveLength(2);
+    expect(events[0]?.eventType).toBe(
+      "workflow.tenant_provisioning.progress.v1",
+    );
+    expect(events[1]?.eventType).toBe("workflow.tenant_provisioning.failed.v1");
   });
 
   it("returns 503 for tenant provisioning runtime callbacks without outbox", async () => {

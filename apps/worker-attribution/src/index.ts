@@ -1,11 +1,11 @@
-import { PostgresOutboxRepository, createPgPoolFromEnv } from "@growthos/db";
+import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
 import { AttributionWorker } from "./attribution-worker.js";
 import { NatsJetStreamPublisher } from "./nats-publisher.js";
 
 export const createAttributionWorkerFromEnv =
   async (): Promise<AttributionWorker> => {
     const outboxRepository = new PostgresOutboxRepository(
-      createPgPoolFromEnv(),
+      createDbFromEnv(),
       {
         actorKind: "system",
       },

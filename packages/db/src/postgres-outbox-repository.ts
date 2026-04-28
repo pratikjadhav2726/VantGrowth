@@ -1,119 +1,100 @@
-import pg from "pg";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import type { EnqueueOutboxEvent, StoredOutboxEvent } from "./contracts.js";
 import {
-  type EnqueueOutboxEvent,
-  type StoredOutboxEvent,
   enqueueOutboxEventSchema,
   storedOutboxEventSchema,
   tenantIdSchema,
 } from "./contracts.js";
+import type { GrowthOsDb } from "./db.js";
 import type { OutboxRepository } from "./outbox-repository.js";
-import { createTenantSettingsSql } from "./tenant-context.js";
+import { eventOutbox } from "./schema.js";
+import type { TenantContext } from "./tenant-context.js";
 
-const { Pool } = pg;
+export type { GrowthOsDb };
 
-export interface PgClient {
-  query<T extends Record<string, unknown> = Record<string, unknown>>(
-    text: string,
-    values?: readonly unknown[],
-  ): Promise<{ rows: T[] }>;
-  release?(): void;
-}
+// ─── helpers ─────────────────────────────────────────────────────────────────
 
-export interface PgPool {
-  connect(): Promise<PgClient>;
-}
-
-export interface PostgresOutboxRepositoryOptions {
-  actorId?: string;
-  actorKind?: "user" | "agent" | "system";
-}
-
-interface OutboxRow extends Record<string, unknown> {
-  id: string | number | bigint;
-  tenant_id: string;
-  event_type: string;
-  idempotency_key: string;
-  payload: Record<string, unknown>;
-  created_at: Date | string;
-  consumed_at: Date | string | null;
-}
-
-export const createPgPoolFromEnv = (
-  env: Record<string, string | undefined> = process.env,
-): PgPool => {
-  const connectionString = env.DATABASE_URL;
-  if (!connectionString)
-    throw new Error("DATABASE_URL is required to create a Postgres pool.");
-
-  return new Pool({
-    connectionString,
-    max: Number(env.DATABASE_POOL_MAX ?? 10),
-    idleTimeoutMillis: Number(env.DATABASE_IDLE_TIMEOUT_MS ?? 30_000),
-  });
-};
-
-const mapOutboxRow = (row: OutboxRow): StoredOutboxEvent =>
+const mapRow = (row: typeof eventOutbox.$inferSelect): StoredOutboxEvent =>
   storedOutboxEventSchema.parse({
     id: String(row.id),
-    tenantId: row.tenant_id,
-    eventType: row.event_type,
-    idempotencyKey: row.idempotency_key,
+    tenantId: row.tenantId,
+    eventType: row.eventType,
+    idempotencyKey: row.idempotencyKey,
     payload: row.payload,
-    createdAt:
-      row.created_at instanceof Date
-        ? row.created_at
-        : new Date(row.created_at),
-    consumedAt:
-      row.consumed_at === null
-        ? null
-        : row.consumed_at instanceof Date
-          ? row.consumed_at
-          : new Date(row.consumed_at),
+    createdAt: row.createdAt,
+    consumedAt: row.consumedAt ?? null,
   });
+
+const setTenantContext = (
+  tx: Parameters<Parameters<GrowthOsDb["transaction"]>[0]>[0],
+  context: TenantContext,
+) =>
+  tx.execute(
+    sql`SELECT
+      set_config('app.tenant_id',  ${context.tenantId},           true),
+      set_config('app.actor_id',   ${context.actorId ?? ""},      true),
+      set_config('app.actor_kind', ${context.actorKind ?? "system"}, true)`,
+  );
+
+// ─── PostgresOutboxRepository ─────────────────────────────────────────────────
 
 export class PostgresOutboxRepository implements OutboxRepository {
   constructor(
-    private readonly pool: PgPool,
-    private readonly options: PostgresOutboxRepositoryOptions = {},
+    private readonly db: GrowthOsDb,
+    private readonly context: Partial<TenantContext> = {},
   ) {}
 
   async enqueue(command: EnqueueOutboxEvent): Promise<StoredOutboxEvent> {
     const parsed = enqueueOutboxEventSchema.parse(command);
+    const tenantContext: TenantContext = {
+      tenantId: parsed.tenantId,
+      ...(this.context.actorId ? { actorId: this.context.actorId } : {}),
+      actorKind: this.context.actorKind ?? "system",
+    };
 
-    return this.withTenantClient(parsed.tenantId, async (client) => {
-      const result = await client.query<OutboxRow>(
-        `
-        WITH inserted AS (
-          INSERT INTO growthos.event_outbox (tenant_id, event_type, idempotency_key, payload)
-          VALUES ($1, $2, $3, $4::jsonb)
-          ON CONFLICT (tenant_id, event_type, idempotency_key) DO NOTHING
-          RETURNING id, tenant_id, event_type, idempotency_key, payload, created_at, consumed_at
+    return this.db.transaction(async (tx) => {
+      await setTenantContext(tx, tenantContext);
+
+      // Idempotent insert: on conflict return the existing row.
+      await tx
+        .insert(eventOutbox)
+        .values({
+          tenantId: parsed.tenantId,
+          eventType: parsed.eventType,
+          idempotencyKey: parsed.idempotencyKey,
+          payload: parsed.payload,
+        })
+        .onConflictDoNothing({
+          target: [
+            eventOutbox.tenantId,
+            eventOutbox.eventType,
+            eventOutbox.idempotencyKey,
+          ],
+        });
+
+      const [row] = await tx
+        .select()
+        .from(eventOutbox)
+        .where(
+          and(
+            eq(eventOutbox.tenantId, parsed.tenantId),
+            eq(eventOutbox.eventType, parsed.eventType),
+            eq(eventOutbox.idempotencyKey, parsed.idempotencyKey),
+          ),
         )
-        SELECT id, tenant_id, event_type, idempotency_key, payload, created_at, consumed_at
-        FROM inserted
-        UNION ALL
-        SELECT id, tenant_id, event_type, idempotency_key, payload, created_at, consumed_at
-        FROM growthos.event_outbox
-        WHERE tenant_id = $1
-          AND event_type = $2
-          AND idempotency_key = $3
-        LIMIT 1
-        `,
-        [
-          parsed.tenantId,
-          parsed.eventType,
-          parsed.idempotencyKey,
-          JSON.stringify(parsed.payload),
-        ],
+        .limit(1);
+
+      if (!row) throw new Error("Failed to enqueue or load outbox event.");
+
+      // Notify other processes that a new event is ready to drain.
+      await tx.execute(
+        sql`SELECT pg_notify(
+          'growthos_outbox_events',
+          ${JSON.stringify({ tenantId: parsed.tenantId, eventId: String(row.id) })}
+        )`,
       );
 
-      const row = result.rows[0];
-      if (!row) throw new Error("Failed to enqueue or load outbox event.");
-      await client.query(
-        "SELECT pg_notify('growthos_outbox_events', $1)",
-        [JSON.stringify({ tenantId: parsed.tenantId, eventId: String(row.id) })],
-      );
-      return mapOutboxRow(row);
+      return mapRow(row);
     });
   }
 
@@ -123,23 +104,29 @@ export class PostgresOutboxRepository implements OutboxRepository {
     consumedAt = new Date(),
   ): Promise<StoredOutboxEvent> {
     const parsedTenantId = tenantIdSchema.parse(tenantId);
+    const tenantContext: TenantContext = {
+      tenantId: parsedTenantId,
+      ...(this.context.actorId ? { actorId: this.context.actorId } : {}),
+      actorKind: this.context.actorKind ?? "system",
+    };
 
-    return this.withTenantClient(parsedTenantId, async (client) => {
-      const result = await client.query<OutboxRow>(
-        `
-        UPDATE growthos.event_outbox
-        SET consumed_at = $3
-        WHERE tenant_id = $1
-          AND id = $2
-        RETURNING id, tenant_id, event_type, idempotency_key, payload, created_at, consumed_at
-        `,
-        [parsedTenantId, eventId, consumedAt],
-      );
+    return this.db.transaction(async (tx) => {
+      await setTenantContext(tx, tenantContext);
 
-      const row = result.rows[0];
+      const [row] = await tx
+        .update(eventOutbox)
+        .set({ consumedAt })
+        .where(
+          and(
+            eq(eventOutbox.tenantId, parsedTenantId),
+            eq(eventOutbox.id, BigInt(eventId)),
+          ),
+        )
+        .returning();
+
       if (!row)
         throw new Error(`Outbox event not found for tenant: ${eventId}`);
-      return mapOutboxRow(row);
+      return mapRow(row);
     });
   }
 
@@ -148,46 +135,28 @@ export class PostgresOutboxRepository implements OutboxRepository {
     limit: number,
   ): Promise<StoredOutboxEvent[]> {
     const parsedTenantId = tenantIdSchema.parse(tenantId);
+    const tenantContext: TenantContext = {
+      tenantId: parsedTenantId,
+      ...(this.context.actorId ? { actorId: this.context.actorId } : {}),
+      actorKind: this.context.actorKind ?? "system",
+    };
 
-    return this.withTenantClient(parsedTenantId, async (client) => {
-      const result = await client.query<OutboxRow>(
-        `
-        SELECT id, tenant_id, event_type, idempotency_key, payload, created_at, consumed_at
-        FROM growthos.event_outbox
-        WHERE tenant_id = $1
-          AND consumed_at IS NULL
-        ORDER BY id ASC
-        LIMIT $2
-        `,
-        [parsedTenantId, limit],
-      );
+    return this.db.transaction(async (tx) => {
+      await setTenantContext(tx, tenantContext);
 
-      return result.rows.map(mapOutboxRow);
+      const rows = await tx
+        .select()
+        .from(eventOutbox)
+        .where(
+          and(
+            eq(eventOutbox.tenantId, parsedTenantId),
+            isNull(eventOutbox.consumedAt),
+          ),
+        )
+        .orderBy(asc(eventOutbox.id))
+        .limit(limit);
+
+      return rows.map(mapRow);
     });
-  }
-
-  private async withTenantClient<T>(
-    tenantId: string,
-    operation: (client: PgClient) => Promise<T>,
-  ): Promise<T> {
-    const client = await this.pool.connect();
-
-    try {
-      await client.query("BEGIN");
-      const tenantSettings = createTenantSettingsSql({
-        tenantId,
-        ...(this.options.actorId ? { actorId: this.options.actorId } : {}),
-        actorKind: this.options.actorKind ?? "system",
-      });
-      await client.query(tenantSettings.sql, tenantSettings.params);
-      const result = await operation(client);
-      await client.query("COMMIT");
-      return result;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release?.();
-    }
   }
 }

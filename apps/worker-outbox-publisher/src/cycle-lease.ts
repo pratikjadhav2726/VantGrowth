@@ -1,4 +1,5 @@
-import type { PgPool } from "@growthos/db";
+import type { GrowthOsDb } from "@growthos/db";
+import { sql } from "drizzle-orm";
 import { z } from "zod";
 
 const leaseConfigSchema = z.object({
@@ -18,38 +19,26 @@ export interface CycleLeaseGuard {
   runWithLease<T>(operation: () => Promise<T>): Promise<T | null>;
 }
 
-interface LockRow extends Record<string, unknown> {
-  acquired: boolean;
-}
+type LockResult = { acquired: boolean };
 
 export class PostgresCycleLeaseGuard implements CycleLeaseGuard {
   constructor(
-    private readonly pool: PgPool,
+    private readonly db: GrowthOsDb,
     private readonly config: CycleLeaseConfig,
   ) {}
 
   async runWithLease<T>(operation: () => Promise<T>): Promise<T | null> {
-    const client = await this.pool.connect();
-
-    try {
-      await client.query("BEGIN");
-      const lockResult = await client.query<LockRow>(
-        "SELECT pg_try_advisory_xact_lock($1) AS acquired",
-        [this.config.advisoryLockKey],
+    return this.db.transaction(async (tx) => {
+      const rows = await tx.execute<LockResult>(
+        sql`SELECT pg_try_advisory_xact_lock(${this.config.advisoryLockKey}) AS acquired`,
       );
-      if (!lockResult.rows[0]?.acquired) {
-        await client.query("ROLLBACK");
-        return null;
-      }
 
-      const result = await operation();
-      await client.query("COMMIT");
-      return result;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release?.();
-    }
+      // Drizzle execute returns { rows: [...] }
+      const acquired = (rows as unknown as { rows: LockResult[] }).rows[0]
+        ?.acquired;
+      if (!acquired) return null;
+
+      return operation();
+    });
   }
 }

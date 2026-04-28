@@ -1,11 +1,11 @@
-import { PostgresOutboxRepository, createPgPoolFromEnv } from "@growthos/db";
+import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
 import { NatsJetStreamPublisher } from "./nats-publisher.js";
 import { WorkflowCallbackWorker } from "./workflow-callback-worker.js";
 
 export const createWorkflowCallbackWorkerFromEnv =
   async (): Promise<WorkflowCallbackWorker> => {
     const outboxRepository = new PostgresOutboxRepository(
-      createPgPoolFromEnv(),
+      createDbFromEnv(),
       {
         actorKind: "system",
       },

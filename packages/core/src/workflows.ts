@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { callbackTypeSchema } from "./workflow-state.js";
 
 export const restateHelloWorkflowInputSchema = z.object({
   tenantId: z.string().uuid(),
@@ -115,18 +116,26 @@ export const acceptTenantProvisioningWorkflowDeterministic = (
 export const tenantProvisioningRuntimeCallbackSchema =
   tenantProvisioningWorkflowInputSchema.extend({
     callbackId: z.string().min(1),
+    callbackType: callbackTypeSchema.default("completed"),
     runtimeRunId: z.string().min(1).optional(),
     progressStep: z.string().min(1).optional(),
     progressMessage: z.string().min(1).optional(),
     progressPercent: z.number().min(0).max(100).optional(),
+    failureCode: z.string().min(1).optional(),
+    failureMessage: z.string().min(1).optional(),
   });
 
 export type TenantProvisioningRuntimeCallback = z.infer<
   typeof tenantProvisioningRuntimeCallbackSchema
 >;
 
+// Input type for command builders — allows callbackType to be omitted (defaults to "completed").
+export type TenantProvisioningRuntimeCallbackInput = z.input<
+  typeof tenantProvisioningRuntimeCallbackSchema
+>;
+
 export const createTenantProvisioningCompletedOutboxCommand = (
-  input: TenantProvisioningRuntimeCallback,
+  input: TenantProvisioningRuntimeCallbackInput,
 ) => {
   const parsed = tenantProvisioningRuntimeCallbackSchema.parse(input);
   const accepted = acceptTenantProvisioningWorkflowDeterministic(parsed);
@@ -151,7 +160,7 @@ export const createTenantProvisioningCompletedOutboxCommand = (
 };
 
 export const createTenantProvisioningProgressOutboxCommand = (
-  input: TenantProvisioningRuntimeCallback,
+  input: TenantProvisioningRuntimeCallbackInput,
 ) => {
   const parsed = tenantProvisioningRuntimeCallbackSchema.parse(input);
 
@@ -165,11 +174,36 @@ export const createTenantProvisioningProgressOutboxCommand = (
       tenant_external_id: parsed.tenantExternalId,
       tenant_name: parsed.tenantName,
       callback_id: parsed.callbackId,
+      callback_type: parsed.callbackType,
       runtime_run_id: parsed.runtimeRunId ?? null,
       progress_step: parsed.progressStep ?? "callback_received",
       progress_message: parsed.progressMessage ?? "Runtime callback received",
       progress_percent: parsed.progressPercent ?? null,
       occurred_at: new Date().toISOString(),
+    },
+  };
+};
+
+export const createTenantProvisioningFailedOutboxCommand = (
+  input: TenantProvisioningRuntimeCallbackInput,
+) => {
+  const parsed = tenantProvisioningRuntimeCallbackSchema.parse(input);
+
+  return {
+    tenantId: parsed.tenantId,
+    eventType: "workflow.tenant_provisioning.failed.v1",
+    idempotencyKey: `${parsed.dedupeKey}:failed:${parsed.callbackId}`,
+    payload: {
+      workflow_id: parsed.workflowId,
+      tenant_id: parsed.tenantId,
+      tenant_external_id: parsed.tenantExternalId,
+      tenant_name: parsed.tenantName,
+      callback_id: parsed.callbackId,
+      runtime_run_id: parsed.runtimeRunId ?? null,
+      failure_code: parsed.failureCode ?? "UNKNOWN",
+      failure_message:
+        parsed.failureMessage ?? "Workflow failed without details",
+      failed_at: new Date().toISOString(),
     },
   };
 };

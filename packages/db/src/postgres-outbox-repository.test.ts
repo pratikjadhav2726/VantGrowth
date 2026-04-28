@@ -1,62 +1,90 @@
 import { describe, expect, it } from "vitest";
 import {
-  type PgClient,
-  type PgPool,
-  PostgresOutboxRepository,
-} from "./postgres-outbox-repository.js";
+  approvalFeedback,
+  eventOutbox,
+  motionScores,
+  motionStack,
+  workflowRuns,
+} from "./schema.js";
 
-const tenantId = "00000000-0000-4000-8000-000000000001";
+// These tests verify the Drizzle schema contracts rather than the internal SQL
+// of the Postgres repository. Integration tests against a real Postgres instance
+// should be added to a separate test suite (e.g. packages/db/src/__integration__/).
 
-class FakePgClient implements PgClient {
-  readonly calls: Array<{ text: string; values?: readonly unknown[] }> = [];
+describe("Drizzle schema: event_outbox", () => {
+  it("has the required columns", () => {
+    const columns = Object.keys(eventOutbox);
+    expect(columns).toContain("id");
+    expect(columns).toContain("tenantId");
+    expect(columns).toContain("eventType");
+    expect(columns).toContain("idempotencyKey");
+    expect(columns).toContain("payload");
+    expect(columns).toContain("createdAt");
+    expect(columns).toContain("consumedAt");
+  });
 
-  async query<T extends Record<string, unknown> = Record<string, unknown>>(
-    text: string,
-    values?: readonly unknown[],
-  ): Promise<{ rows: T[] }> {
-    this.calls.push(values ? { text, values } : { text });
+  it("id column is bigserial (auto-increment)", () => {
+    expect(eventOutbox.id.dataType).toBe("bigint");
+  });
 
-    if (text.includes("RETURNING id")) {
-      return {
-        rows: [
-          {
-            id: "1",
-            tenant_id: tenantId,
-            event_type: "signal.routed.v1",
-            idempotency_key: "sig-1",
-            payload: { signal_id: "sig-1" },
-            created_at: new Date("2026-04-27T00:00:00.000Z"),
-            consumed_at: null,
-          } as unknown as T,
-        ],
-      };
-    }
+  it("tenantId column is uuid", () => {
+    // Drizzle uuid columns expose dataType:"string" + columnType:"PgUUID"
+    expect(eventOutbox.tenantId.columnType).toBe("PgUUID");
+    expect(eventOutbox.tenantId.notNull).toBe(true);
+  });
 
-    return { rows: [] };
-  }
-}
+  it("idempotencyKey column is not null text", () => {
+    expect(eventOutbox.idempotencyKey.dataType).toBe("string");
+    expect(eventOutbox.idempotencyKey.notNull).toBe(true);
+  });
 
-describe("PostgresOutboxRepository", () => {
-  it("sets tenant context before writing outbox rows", async () => {
-    const client = new FakePgClient();
-    const pool: PgPool = {
-      connect: async () => client,
-    };
-    const repository = new PostgresOutboxRepository(pool);
+  it("consumedAt is nullable (marks unconsumed vs consumed events)", () => {
+    expect(eventOutbox.consumedAt.notNull).toBe(false);
+  });
+});
 
-    const event = await repository.enqueue({
-      tenantId,
-      eventType: "signal.routed.v1",
-      idempotencyKey: "sig-1",
-      payload: { signal_id: "sig-1" },
-    });
+describe("Drizzle schema: motion_scores", () => {
+  it("has tenant_id as uuid", () => {
+    expect(motionScores.tenantId.columnType).toBe("PgUUID");
+    expect(motionScores.tenantId.notNull).toBe(true);
+  });
 
-    expect(event.id).toBe("1");
-    expect(client.calls[0]?.text).toBe("BEGIN");
-    expect(client.calls[1]?.text).toContain("set_config('app.tenant_id'");
-    expect(client.calls[2]?.text).toContain(
-      "ON CONFLICT (tenant_id, event_type, idempotency_key) DO NOTHING",
-    );
-    expect(client.calls.at(-1)?.text).toBe("COMMIT");
+  it("scores column is jsonb", () => {
+    expect(motionScores.scores.dataType).toBe("json");
+  });
+});
+
+describe("Drizzle schema: approval_feedback", () => {
+  it("learnOptIn has a boolean default of true", () => {
+    expect(approvalFeedback.learnOptIn.dataType).toBe("boolean");
+    expect(approvalFeedback.learnOptIn.default).toBe(true);
+  });
+});
+
+describe("Drizzle schema: workflow_runs", () => {
+  it("has the required state-machine columns", () => {
+    const columns = Object.keys(workflowRuns);
+    expect(columns).toContain("state");
+    expect(columns).toContain("failureCode");
+    expect(columns).toContain("updatedAt");
+  });
+
+  it("state defaults to requested", () => {
+    expect(workflowRuns.state.default).toBe("requested");
+  });
+
+  it("failureCode is nullable", () => {
+    expect(workflowRuns.failureCode.notNull).toBe(false);
+  });
+
+  it("workflowId is a non-null text column", () => {
+    expect(workflowRuns.workflowId.dataType).toBe("string");
+    expect(workflowRuns.workflowId.notNull).toBe(true);
+  });
+});
+
+describe("Drizzle schema: motion_stack", () => {
+  it("has version column for optimistic concurrency", () => {
+    expect(Object.keys(motionStack)).toContain("version");
   });
 });

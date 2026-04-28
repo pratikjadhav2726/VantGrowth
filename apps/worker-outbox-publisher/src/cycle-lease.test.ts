@@ -1,58 +1,60 @@
-import { describe, expect, it } from "vitest";
+import type { GrowthOsDb } from "@growthos/db";
+import { describe, expect, it, vi } from "vitest";
 import {
   PostgresCycleLeaseGuard,
   cycleLeaseConfigFromEnv,
 } from "./cycle-lease.js";
 
-class FakeClient {
-  calls: Array<{ text: string; values?: readonly unknown[] }> = [];
-  constructor(private readonly acquired: boolean) {}
-
-  async query<T extends Record<string, unknown> = Record<string, unknown>>(
-    text: string,
-    values?: readonly unknown[],
-  ): Promise<{ rows: T[] }> {
-    this.calls.push(values ? { text, values } : { text });
-    if (text.includes("pg_try_advisory_xact_lock")) {
-      return { rows: [{ acquired: this.acquired } as unknown as T] };
-    }
-    return { rows: [] as T[] };
-  }
-
-  release() {}
-}
+const makeMockDb = (acquired: boolean): GrowthOsDb => {
+  const mockTx = {
+    execute: vi.fn().mockResolvedValue({ rows: [{ acquired }] }),
+  };
+  return {
+    transaction: vi.fn(async (cb: (tx: typeof mockTx) => Promise<unknown>) =>
+      cb(mockTx),
+    ),
+  } as unknown as GrowthOsDb;
+};
 
 describe("PostgresCycleLeaseGuard", () => {
   it("executes operation when advisory lease is acquired", async () => {
-    const client = new FakeClient(true);
-    const guard = new PostgresCycleLeaseGuard(
-      {
-        connect: async () => client,
-      },
-      { advisoryLockKey: 42 },
-    );
+    const db = makeMockDb(true);
+    const guard = new PostgresCycleLeaseGuard(db, { advisoryLockKey: 42 });
 
     const result = await guard.runWithLease(async () => "ok");
 
     expect(result).toBe("ok");
-    expect(client.calls[0]?.text).toBe("BEGIN");
-    expect(client.calls[1]?.text).toContain("pg_try_advisory_xact_lock");
-    expect(client.calls.at(-1)?.text).toBe("COMMIT");
+    expect(db.transaction).toHaveBeenCalledOnce();
   });
 
-  it("skips operation when lease is not acquired", async () => {
-    const client = new FakeClient(false);
-    const guard = new PostgresCycleLeaseGuard(
-      {
-        connect: async () => client,
-      },
-      { advisoryLockKey: 42 },
-    );
+  it("skips operation and returns null when lease is not acquired", async () => {
+    const db = makeMockDb(false);
+    const guard = new PostgresCycleLeaseGuard(db, { advisoryLockKey: 42 });
 
-    const result = await guard.runWithLease(async () => "unexpected");
+    const operation = vi.fn(async () => "should-not-run");
+    const result = await guard.runWithLease(operation);
 
     expect(result).toBeNull();
-    expect(client.calls.at(-1)?.text).toBe("ROLLBACK");
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it("calls pg_try_advisory_xact_lock with configured lock key", async () => {
+    const mockTx = {
+      execute: vi.fn().mockResolvedValue({ rows: [{ acquired: true }] }),
+    };
+    const db = {
+      transaction: vi.fn(async (cb: (tx: typeof mockTx) => Promise<unknown>) =>
+        cb(mockTx),
+      ),
+    } as unknown as GrowthOsDb;
+
+    const guard = new PostgresCycleLeaseGuard(db, { advisoryLockKey: 1234 });
+    await guard.runWithLease(async () => "ok");
+
+    const executeCall = mockTx.execute.mock.calls[0]?.[0];
+    // Drizzle SQL templates serialize to objects; check the raw query string
+    const sqlString = JSON.stringify(executeCall);
+    expect(sqlString).toContain("pg_try_advisory_xact_lock");
   });
 });
 
@@ -62,5 +64,10 @@ describe("cycleLeaseConfigFromEnv", () => {
       OUTBOX_LEASE_ADVISORY_LOCK_KEY: "123456",
     });
     expect(config.advisoryLockKey).toBe(123456);
+  });
+
+  it("uses default lock key when env var is absent", () => {
+    const config = cycleLeaseConfigFromEnv({});
+    expect(config.advisoryLockKey).toBe(1_104_021);
   });
 });

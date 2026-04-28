@@ -3,6 +3,7 @@ import {
   acceptTenantProvisioningWorkflowDeterministic,
   createRestateHelloWorkflowOutboxCommand,
   createTenantProvisioningCompletedOutboxCommand,
+  createTenantProvisioningFailedOutboxCommand,
   createTenantProvisioningProgressOutboxCommand,
   createTenantProvisioningWorkflowOutboxCommand,
   runHelloWorkflowDeterministic,
@@ -103,6 +104,7 @@ describe("restate workflow starter contracts", () => {
       requestedBy: "founder",
       callbackId: "cb-1",
       runtimeRunId: "run-1",
+      callbackType: "progress",
       progressStep: "paperclip.company.created",
       progressMessage: "Paperclip company created",
       progressPercent: 25,
@@ -113,6 +115,47 @@ describe("restate workflow starter contracts", () => {
       progress_step: "paperclip.company.created",
       progress_message: "Paperclip company created",
       progress_percent: 25,
+      callback_type: "progress",
     });
+  });
+
+  it("creates tenant provisioning failed outbox command shape", () => {
+    const command = createTenantProvisioningFailedOutboxCommand({
+      tenantId,
+      workflowId: "wf-provision-1",
+      dedupeKey: "wf-provision-1",
+      tenantExternalId: "ten_lat_01",
+      tenantName: "Lattice",
+      requestedBy: "founder",
+      callbackId: "cb-fail-1",
+      runtimeRunId: "run-1",
+      callbackType: "failed",
+      failureCode: "PROVISIONING_TIMEOUT",
+      failureMessage: "Provisioning timed out after 60s",
+    });
+
+    expect(command.eventType).toBe("workflow.tenant_provisioning.failed.v1");
+    expect(command.idempotencyKey).toContain("cb-fail-1");
+    expect(command.idempotencyKey).toContain("failed");
+    expect(command.payload).toMatchObject({
+      failure_code: "PROVISIONING_TIMEOUT",
+      failure_message: "Provisioning timed out after 60s",
+      callback_id: "cb-fail-1",
+      runtime_run_id: "run-1",
+    });
+  });
+
+  it("defaults callbackType to completed when not provided", () => {
+    const command = createTenantProvisioningCompletedOutboxCommand({
+      tenantId,
+      workflowId: "wf-provision-1",
+      dedupeKey: "wf-provision-1",
+      tenantExternalId: "ten_lat_01",
+      tenantName: "Lattice",
+      requestedBy: "founder",
+      callbackId: "cb-1",
+    });
+
+    expect(command.eventType).toBe("workflow.tenant_provisioning.completed.v1");
   });
 });
