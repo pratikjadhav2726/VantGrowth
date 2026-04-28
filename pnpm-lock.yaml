@@ -141,6 +141,9 @@ importers:
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@growthos/llm-harness':
+        specifier: workspace:*
+        version: link:../../packages/llm-harness
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -163,6 +166,9 @@ importers:
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@growthos/llm-harness':
+        specifier: workspace:*
+        version: link:../../packages/llm-harness
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -273,6 +279,9 @@ importers:
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@growthos/llm-harness':
+        specifier: workspace:*
+        version: link:../../packages/llm-harness
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -415,6 +424,16 @@ importers:
       '@types/node':
         specifier: ^22.15.21
         version: 22.19.17
+
+  packages/secrets:
+    dependencies:
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: '*'
+        version: 2.1.9(@types/node@22.19.17)
 
   packages/skills:
     dependencies:

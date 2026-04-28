@@ -11,9 +11,15 @@
  *   2. ContentBriefV1 — a structured writing brief: outline, keywords,
  *      tone notes, CTA, word-count target, and confidence score.
  *
- * Phase 1 design: all generation is deterministic (no LLM).  Replace
- * `expandOpportunity()` and `generateContentBrief()` with LLM-backed variants
- * in Phase 1 S5 without touching the outbox contract or NATS subjects.
+ * ## Brief generation strategy (two-tier)
+ *
+ * 1. **LLM path** (preferred): when a `LlmCallRunner` is injected, the worker
+ *    calls `CONTENT_BRIEF_GENERATE_STRUCTURED_PROMPT` and attempts to parse +
+ *    validate the JSON response as `ContentBriefV1`.
+ *
+ * 2. **Deterministic fallback**: when no runner is injected, or when the LLM
+ *    returns invalid JSON, `generateContentBrief()` is used so the pipeline
+ *    never stalls.
  *
  * Idempotency: both artefacts are keyed by `${brief_id}:${opportunity_id}` so
  * a re-delivered `intel_brief.v1` message produces the same idempotency keys
@@ -32,6 +38,10 @@ import {
 } from "@growthos/core";
 import type { OutboxRepository } from "@growthos/db";
 import { tenantScopedSubject } from "@growthos/db";
+import {
+  CONTENT_BRIEF_GENERATE_STRUCTURED_PROMPT,
+  type LlmCallRunner,
+} from "@growthos/llm-harness";
 
 // ---------------------------------------------------------------------------
 // Deterministic generators
@@ -211,9 +221,77 @@ export interface EventPublisher {
   publish(subject: string, payload: Record<string, unknown>): Promise<void>;
 }
 
+// ---------------------------------------------------------------------------
+// LLM content brief generator
+// ---------------------------------------------------------------------------
+
+/**
+ * Attempts to generate a `ContentBriefV1` via the LLM runner.
+ *
+ * Returns `null` when:
+ *   - The runner throws (network error, timeout).
+ *   - The response contains no parseable JSON object.
+ *   - The parsed JSON fails `contentBriefV1Schema` validation.
+ * The caller falls back to `generateContentBrief()` in all three cases.
+ */
+export const generateLlmContentBrief = async (
+  opportunity: ContentOpportunityV1,
+  runner: LlmCallRunner,
+): Promise<ContentBriefV1 | null> => {
+  let content: string;
+  try {
+    const result = await runner.run(
+      CONTENT_BRIEF_GENERATE_STRUCTURED_PROMPT,
+      {
+        opportunityTitle: opportunity.title,
+        motionFit: opportunity.motion_fit.join(", "),
+        hook: opportunity.hook,
+        targetAudience: opportunity.target_audience.join(", "),
+        tenantId: opportunity.tenant_id,
+        opportunityId: opportunity.opportunity_id,
+      },
+      { tenantId: opportunity.tenant_id },
+    );
+    content = result.content;
+  } catch {
+    return null;
+  }
+
+  const match = content.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+
+  try {
+    const raw = JSON.parse(match[0]) as unknown;
+    const augmented =
+      typeof raw === "object" && raw !== null
+        ? {
+            ...raw,
+            tenant_id: opportunity.tenant_id,
+            opportunity_id: opportunity.opportunity_id,
+            generated_at:
+              (raw as Record<string, unknown>).generated_at ??
+              new Date().toISOString(),
+          }
+        : raw;
+    return contentBriefV1Schema.parse(augmented);
+  } catch {
+    return null;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Worker dependencies
+// ---------------------------------------------------------------------------
+
 export interface ContentStrategistWorkerDependencies {
   outboxRepository: OutboxRepository;
   eventPublisher: EventPublisher;
+  /**
+   * Optional LLM runner.  When present, `processBrief()` attempts to generate
+   * `ContentBriefV1` via `generateLlmContentBrief()` before falling back to
+   * the deterministic generator.
+   */
+  llmCallRunner?: LlmCallRunner;
 }
 
 export interface ProcessBriefResult {
@@ -238,7 +316,14 @@ export class ContentStrategistWorker {
 
     for (const ref of brief.content_opportunities) {
       const opportunity = expandOpportunity(brief, ref);
-      const contentBrief = generateContentBrief(opportunity);
+
+      // LLM path → deterministic fallback.
+      const contentBrief = this.deps.llmCallRunner
+        ? ((await generateLlmContentBrief(
+            opportunity,
+            this.deps.llmCallRunner,
+          )) ?? generateContentBrief(opportunity))
+        : generateContentBrief(opportunity);
 
       // Persist artefacts to outbox (durable, idempotent)
       const oppCommand = createContentOpportunityOutboxCommand(

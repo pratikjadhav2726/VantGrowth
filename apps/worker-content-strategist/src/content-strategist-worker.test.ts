@@ -4,12 +4,14 @@ import {
   intelBriefV1Schema,
 } from "@growthos/core";
 import { InMemoryOutboxRepository } from "@growthos/db";
+import { StubLlmCallRunner } from "@growthos/llm-harness";
 import { describe, expect, it, vi } from "vitest";
 import {
   ContentStrategistWorker,
   type EventPublisher,
   expandOpportunity,
   generateContentBrief,
+  generateLlmContentBrief,
 } from "./content-strategist-worker.js";
 
 // ---------------------------------------------------------------------------
@@ -286,5 +288,140 @@ describe("ContentStrategistWorker", () => {
     const result = await worker.processBrief(multiOpBrief);
     const briefIds = result.briefs.map((b) => b.brief_id);
     expect(new Set(briefIds).size).toBe(2); // all unique
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateLlmContentBrief — LLM path
+// ---------------------------------------------------------------------------
+
+const makeOpportunity = () => {
+  const brief = makeIntelBrief();
+  return expandOpportunity(brief, firstOpp(brief));
+};
+
+const makeOutline = (count = 5) =>
+  Array.from({ length: count }, (_, i) => ({
+    section_title: `Section ${i + 1}`,
+    key_points: [`Key point for section ${i + 1}`],
+    word_count_target: 250,
+  }));
+
+const VALID_BRIEF_JSON = JSON.stringify({
+  schema_version: "content_brief.v1",
+  tenant_id: TENANT_ID,
+  brief_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  opportunity_id: OPPORTUNITY_ID,
+  generated_at: "2026-04-28T10:00:00.000Z",
+  title: "LLM-generated brief title",
+  hook: "Why PLG matters for B2B founders in 2026.",
+  target_audience: ["B2B founders"],
+  search_intent: "informational",
+  primary_keyword: "plg-strategy-2026",
+  secondary_keywords: ["product led growth", "saas sales"],
+  outline: makeOutline(5),
+  tone_notes: "Direct. Founder voice.",
+  claims_to_avoid: ["market leader"],
+  internal_links_suggested: [],
+  cta: "Book a strategy session today.",
+  estimated_word_count: 1400,
+  motion_fit: ["plg"],
+  confidence_score: 0.85,
+});
+
+describe("generateLlmContentBrief", () => {
+  it("returns a validated ContentBriefV1 when LLM returns valid JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      "content-brief.generate-structured": VALID_BRIEF_JSON,
+    });
+    const result = await generateLlmContentBrief(makeOpportunity(), runner);
+
+    expect(result).not.toBeNull();
+    expect(result?.schema_version).toBe("content_brief.v1");
+    expect(result?.title).toBe("LLM-generated brief title");
+    expect(result?.confidence_score).toBe(0.85);
+  });
+
+  it("always sets tenant_id and opportunity_id from the opportunity, not LLM", async () => {
+    const opp = makeOpportunity();
+    const withWrongIds = JSON.stringify({
+      ...(JSON.parse(VALID_BRIEF_JSON) as Record<string, unknown>),
+      tenant_id: "wrong-tenant",
+      opportunity_id: "wrong-opportunity",
+    });
+    const runner = new StubLlmCallRunner({
+      "content-brief.generate-structured": withWrongIds,
+    });
+    const result = await generateLlmContentBrief(opp, runner);
+
+    expect(result?.tenant_id).toBe(TENANT_ID);
+    expect(result?.opportunity_id).toBe(opp.opportunity_id);
+  });
+
+  it("returns null when LLM response contains no JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      "content-brief.generate-structured":
+        "I cannot generate a brief for this topic.",
+    });
+    const result = await generateLlmContentBrief(makeOpportunity(), runner);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when LLM JSON fails schema validation", async () => {
+    const runner = new StubLlmCallRunner({
+      "content-brief.generate-structured": JSON.stringify({
+        schema_version: "wrong_version",
+      }),
+    });
+    const result = await generateLlmContentBrief(makeOpportunity(), runner);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when runner throws", async () => {
+    const runner = {
+      run: async () => {
+        throw new Error("LLM down");
+      },
+    };
+    const result = await generateLlmContentBrief(makeOpportunity(), runner);
+    expect(result).toBeNull();
+  });
+});
+
+describe("ContentStrategistWorker (LLM path)", () => {
+  it("uses LLM brief when runner is configured and returns valid JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      "content-brief.generate-structured": VALID_BRIEF_JSON,
+    });
+    const worker = new ContentStrategistWorker({
+      outboxRepository: new InMemoryOutboxRepository(),
+      eventPublisher: { publish: vi.fn(async () => undefined) },
+      llmCallRunner: runner,
+    });
+
+    const result = await worker.processBrief(makeIntelBrief());
+
+    expect(result.briefs[0]?.title).toBe("LLM-generated brief title");
+    expect(runner.callsFor("content-brief.generate-structured")).toHaveLength(
+      1,
+    );
+  });
+
+  it("falls back to deterministic brief when LLM returns invalid JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      "content-brief.generate-structured": "Not valid JSON",
+    });
+    const worker = new ContentStrategistWorker({
+      outboxRepository: new InMemoryOutboxRepository(),
+      eventPublisher: { publish: vi.fn(async () => undefined) },
+      llmCallRunner: runner,
+    });
+
+    const result = await worker.processBrief(makeIntelBrief());
+
+    // Deterministic brief title is derived from the opportunity title.
+    expect(result.briefs[0]?.title).toBe(
+      "Why PLG outpaces traditional SaaS sales in 2026",
+    );
   });
 });

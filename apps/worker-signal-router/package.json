@@ -14,9 +14,10 @@
   },
   "dependencies": {
     "@growthos/db": "workspace:*",
+    "@growthos/llm-harness": "workspace:*",
+    "@growthos/observability": "workspace:*",
     "nats": "^2.29.3",
-    "zod": "^3.23.8",
-    "@growthos/observability": "workspace:*"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "tsx": "^4.19.4"

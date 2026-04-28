@@ -117,6 +117,68 @@ export const BLOG_DRAFT_GENERATE_PROMPT = definePrompt<{
 });
 
 /**
+ * CONTENT_BRIEF_GENERATE_STRUCTURED_PROMPT
+ *
+ * JSON-output version of the content brief generator, used by the
+ * LLM-backed ContentStrategistWorker.  Returns a ContentBriefV1-shaped
+ * JSON object that is validated before use.
+ */
+export const CONTENT_BRIEF_GENERATE_STRUCTURED_PROMPT = definePrompt<{
+  opportunityTitle: string;
+  motionFit: string;
+  hook: string;
+  targetAudience: string;
+  tenantId: string;
+  opportunityId: string;
+}>({
+  id: "content-brief.generate-structured",
+  version: "1.0.0",
+  system:
+    "You are a senior B2B content strategist. " +
+    "Return ONLY valid JSON — no markdown fences, no commentary. " +
+    "The JSON must conform to the ContentBriefV1 schema.",
+  render: ({
+    opportunityTitle,
+    motionFit,
+    hook,
+    targetAudience,
+    tenantId,
+    opportunityId,
+  }) =>
+    `Generate a structured content brief for the opportunity: "${opportunityTitle}".
+Motion fit: ${motionFit}. Hook: "${hook}". Target audience: ${targetAudience}.
+
+Respond with a JSON object matching this exact shape:
+{
+  "schema_version": "content_brief.v1",
+  "tenant_id": "${tenantId}",
+  "brief_id": "<uuid>",
+  "opportunity_id": "${opportunityId}",
+  "generated_at": "<ISO 8601>",
+  "title": "<string>",
+  "hook": "<string>",
+  "target_audience": ["<string>"],
+  "search_intent": "informational | navigational | transactional | commercial",
+  "primary_keyword": "<string>",
+  "secondary_keywords": ["<string>"],
+  "outline": [
+    {
+      "section_title": "<string>",
+      "key_points": ["<string>"],
+      "word_count_target": 300
+    }
+  ],
+  "tone_notes": "<string>",
+  "claims_to_avoid": ["<string>"],
+  "internal_links_suggested": [],
+  "cta": "<string>",
+  "estimated_word_count": 1400,
+  "motion_fit": ["${motionFit}"],
+  "confidence_score": 0.8
+}`,
+});
+
+/**
  * INTEL_BRIEF_GENERATE_STRUCTURED_PROMPT
  *
  * Upgraded version of the intel brief generator that asks the LLM to produce

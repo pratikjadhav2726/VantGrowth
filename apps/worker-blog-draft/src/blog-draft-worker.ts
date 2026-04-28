@@ -29,6 +29,10 @@ import {
 } from "@growthos/core";
 import type { OutboxRepository } from "@growthos/db";
 import { tenantScopedSubject } from "@growthos/db";
+import {
+  BLOG_DRAFT_GENERATE_PROMPT,
+  type LlmCallRunner,
+} from "@growthos/llm-harness";
 
 // ---------------------------------------------------------------------------
 // Markdown generation helpers
@@ -144,28 +148,121 @@ export const createBlogDraftOutboxCommand = (
 });
 
 // ---------------------------------------------------------------------------
-// Worker
+// Event publisher interface
 // ---------------------------------------------------------------------------
 
 export interface EventPublisher {
   publish(subject: string, payload: Record<string, unknown>): Promise<void>;
 }
 
+// ---------------------------------------------------------------------------
+// LLM blog draft generator
+// ---------------------------------------------------------------------------
+
+/**
+ * Generates the `body_markdown` for a blog post via the LLM runner.
+ *
+ * `BLOG_DRAFT_GENERATE_PROMPT` returns raw prose markdown — the caller
+ * wraps it in a `BlogDraftV1` with computed quality indicators.
+ *
+ * Returns `null` on any failure (runner error, empty response).
+ * The caller falls back to `generateBlogDraft()`.
+ */
+export const generateLlmBlogDraft = async (
+  brief: ContentBriefV1,
+  runner: LlmCallRunner,
+): Promise<BlogDraftV1 | null> => {
+  let bodyMarkdown: string;
+  try {
+    const result = await runner.run(
+      BLOG_DRAFT_GENERATE_PROMPT,
+      {
+        title: brief.title,
+        hook: brief.hook,
+        outline: brief.outline
+          .map(
+            (s) =>
+              `${s.section_title}: ${s.key_points.join("; ")} (${s.word_count_target} words)`,
+          )
+          .join(" | "),
+        toneNotes: brief.tone_notes,
+        primaryKeyword: brief.primary_keyword,
+      },
+      { tenantId: brief.tenant_id },
+    );
+    bodyMarkdown = result.content.trim();
+  } catch {
+    return null;
+  }
+
+  if (!bodyMarkdown) return null;
+
+  const wordCount = countWords(bodyMarkdown);
+  const readingTimeMinutes = Math.max(1, Math.ceil(wordCount / 200));
+  const headingCount = countMarkdownHeadings(bodyMarkdown);
+  const hasCta = CTA_PATTERN.test(brief.cta) || CTA_PATTERN.test(bodyMarkdown);
+  const hasInternalLinks = brief.internal_links_suggested.length > 0;
+
+  const draft: BlogDraftV1 = {
+    schema_version: "blog_draft.v1",
+    tenant_id: brief.tenant_id,
+    draft_id: crypto.randomUUID(),
+    brief_id: brief.brief_id,
+    generated_at: new Date().toISOString(),
+    iteration: 1,
+    title: brief.title,
+    meta_description:
+      brief.hook.slice(0, 157).trimEnd() +
+      (brief.hook.length > 157 ? "..." : ""),
+    body_markdown: bodyMarkdown,
+    word_count: wordCount,
+    reading_time_minutes: readingTimeMinutes,
+    estimated_claims: [],
+    quality_indicators: {
+      flesch_score: null,
+      grade_level: null,
+      has_cta: hasCta,
+      has_internal_links: hasInternalLinks,
+      heading_count: headingCount,
+    },
+    status: "draft",
+  };
+
+  return blogDraftV1Schema.parse(draft);
+};
+
+// ---------------------------------------------------------------------------
+// Worker
+// ---------------------------------------------------------------------------
+
 export interface BlogDraftWorkerDependencies {
   outboxRepository: OutboxRepository;
   eventPublisher: EventPublisher;
+  /**
+   * Optional LLM runner.  When present, `processBrief()` calls
+   * `generateLlmBlogDraft()` before falling back to the deterministic
+   * placeholder generator.
+   */
+  llmCallRunner?: LlmCallRunner;
 }
 
 export class BlogDraftWorker {
   constructor(private readonly deps: BlogDraftWorkerDependencies) {}
 
   /**
-   * Processes a `content_brief.v1` event, generates a BlogDraftV1, and
-   * emits it to the outbox and NATS.
+   * Processes a `content_brief.v1` event.
+   *
+   * Generation order:
+   *   1. If `llmCallRunner` is configured → try `generateLlmBlogDraft()`.
+   *   2. On failure or no runner → `generateBlogDraft()` (deterministic).
    */
   async processBrief(input: unknown): Promise<BlogDraftV1> {
     const brief = contentBriefV1Schema.parse(input);
-    const draft = generateBlogDraft(brief);
+
+    const draft = this.deps.llmCallRunner
+      ? ((await generateLlmBlogDraft(brief, this.deps.llmCallRunner)) ??
+        generateBlogDraft(brief))
+      : generateBlogDraft(brief);
     const command = createBlogDraftOutboxCommand(draft, draft.iteration);
 
     await this.deps.outboxRepository.enqueue(command);

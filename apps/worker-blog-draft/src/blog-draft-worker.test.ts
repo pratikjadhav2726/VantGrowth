@@ -1,10 +1,12 @@
 import { blogDraftV1Schema, contentBriefV1Schema } from "@growthos/core";
 import { InMemoryOutboxRepository } from "@growthos/db";
+import { StubLlmCallRunner } from "@growthos/llm-harness";
 import { describe, expect, it, vi } from "vitest";
 import {
   BlogDraftWorker,
   type EventPublisher,
   generateBlogDraft,
+  generateLlmBlogDraft,
 } from "./blog-draft-worker.js";
 
 // ---------------------------------------------------------------------------
@@ -222,5 +224,112 @@ describe("BlogDraftWorker", () => {
   it("rejects invalid input with a parse error", async () => {
     const { worker } = makeWorker();
     await expect(worker.processBrief({ not: "a_brief" })).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateLlmBlogDraft — LLM path
+// ---------------------------------------------------------------------------
+
+const LLM_BLOG_BODY = `# Why PLG Beats Traditional SaaS Sales in 2026
+
+> Why PLG matters for B2B founders right now.
+
+## Introduction
+
+Product-led growth is reshaping B2B SaaS.
+
+## Core Framework
+
+PLG flips the funnel.
+
+## Evidence
+
+Studies show PLG companies grow 2x faster. This is a proof point.
+
+## Implementation
+
+Start with a free tier and measure time-to-value.
+
+## Conclusion
+
+Book a strategy session to explore PLG for your business.
+`;
+
+describe("generateLlmBlogDraft", () => {
+  it("returns a BlogDraftV1 using LLM prose as body when runner succeeds", async () => {
+    const runner = new StubLlmCallRunner({
+      "blog-draft.generate": LLM_BLOG_BODY,
+    });
+
+    const result = await generateLlmBlogDraft(makeBrief(), runner);
+
+    expect(result).not.toBeNull();
+    expect(result?.schema_version).toBe("blog_draft.v1");
+    expect(result?.body_markdown).toContain("Product-led growth");
+    expect(result?.quality_indicators.heading_count).toBeGreaterThan(0);
+  });
+
+  it("computes word count and reading time from LLM prose", async () => {
+    const runner = new StubLlmCallRunner({
+      "blog-draft.generate": LLM_BLOG_BODY,
+    });
+
+    const result = await generateLlmBlogDraft(makeBrief(), runner);
+
+    expect(result?.word_count).toBeGreaterThan(0);
+    expect(result?.reading_time_minutes).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns null when runner throws", async () => {
+    const runner = {
+      run: async () => {
+        throw new Error("LLM down");
+      },
+    };
+    const result = await generateLlmBlogDraft(makeBrief(), runner);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when runner returns empty content", async () => {
+    const runner = new StubLlmCallRunner({ "blog-draft.generate": "" });
+    const result = await generateLlmBlogDraft(makeBrief(), runner);
+    expect(result).toBeNull();
+  });
+});
+
+describe("BlogDraftWorker (LLM path)", () => {
+  it("uses LLM body when runner is configured and returns content", async () => {
+    const runner = new StubLlmCallRunner({
+      "blog-draft.generate": LLM_BLOG_BODY,
+    });
+    const worker = new BlogDraftWorker({
+      outboxRepository: new InMemoryOutboxRepository(),
+      eventPublisher: { publish: vi.fn(async () => undefined) },
+      llmCallRunner: runner,
+    });
+
+    const draft = await worker.processBrief(makeBrief());
+
+    expect(draft.body_markdown).toContain("Product-led growth");
+    expect(runner.callsFor("blog-draft.generate")).toHaveLength(1);
+  });
+
+  it("falls back to deterministic draft when LLM runner throws", async () => {
+    const runner = {
+      run: async () => {
+        throw new Error("LLM down");
+      },
+    };
+    const worker = new BlogDraftWorker({
+      outboxRepository: new InMemoryOutboxRepository(),
+      eventPublisher: { publish: vi.fn(async () => undefined) },
+      llmCallRunner: runner,
+    });
+
+    const draft = await worker.processBrief(makeBrief());
+
+    // Deterministic body contains placeholder text.
+    expect(draft.body_markdown).toContain("placeholder");
   });
 });

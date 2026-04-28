@@ -13,11 +13,23 @@ export const incomingSignalSchema = z.object({
 
 export type IncomingSignal = z.infer<typeof incomingSignalSchema>;
 
+/** LLM-graded quality metadata for a signal. */
+export const signalGradeSchema = z.object({
+  relevance: z.number().min(0).max(1),
+  urgency: z.enum(["low", "medium", "high"]),
+  topicCategory: z.string().min(1),
+  actionRecommendations: z.array(z.string()),
+});
+
+export type SignalGrade = z.infer<typeof signalGradeSchema>;
+
 export const routedSignalSchema = incomingSignalSchema.extend({
   priority: signalPrioritySchema,
   targetAgent: z.string().min(1),
   halfLifeMinutes: z.number().int().positive(),
   routedAt: z.date(),
+  /** Present when an LlmCallRunner is configured on the SignalRouter. */
+  grade: signalGradeSchema.optional(),
 });
 
 export type RoutedSignal = z.infer<typeof routedSignalSchema>;
