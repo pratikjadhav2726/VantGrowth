@@ -1,5 +1,5 @@
 {
-  "name": "@growthos/core",
+  "name": "@growthos/worker-intel-director",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -7,12 +7,19 @@
   "files": ["dist", "src"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
     "lint": "biome check src",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1038.0",
+    "@growthos/core": "workspace:*",
+    "@growthos/db": "workspace:*",
+    "@growthos/observability": "workspace:*",
+    "nats": "^2.29.3",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.4"
   }
 }

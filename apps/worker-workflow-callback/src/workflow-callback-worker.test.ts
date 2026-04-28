@@ -1,11 +1,18 @@
 import type { TenantProvisioningRuntimeState } from "@growthos/core";
 import {
+  StubGiteaProvisioningClient,
+  StubMinioProvisioningClient,
+  StubNatsProvisioningClient,
+  StubPaperclipProvisioningClient,
+} from "@growthos/core";
+import {
   InMemoryOutboxRepository,
   InMemoryWorkflowRunRepository,
 } from "@growthos/db";
 import { describe, expect, it, vi } from "vitest";
 import {
   type EventPublisher,
+  type ProvisioningClients,
   type RuntimeStateVerifier,
   WorkflowCallbackWorker,
 } from "./workflow-callback-worker.js";
@@ -171,6 +178,168 @@ describe("WorkflowCallbackWorker", () => {
     const run = await workflowRunRepository.getByWorkflowId(
       tenantId,
       "wf-provision-fail",
+    );
+    expect(run?.state).toBe("failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Orchestrator (direct provisioning) path
+// ---------------------------------------------------------------------------
+
+const makeProvisioningClients = (): ProvisioningClients => ({
+  paperclip: new StubPaperclipProvisioningClient(),
+  gitea: new StubGiteaProvisioningClient(),
+  nats: new StubNatsProvisioningClient(),
+  minio: new StubMinioProvisioningClient(),
+});
+
+describe("WorkflowCallbackWorker — orchestrator path", () => {
+  const provisioningRequest = {
+    tenantId,
+    workflowId: "wf-orch-1",
+    dedupeKey: "wf-orch-1",
+    tenantExternalId: "ten_acme_01",
+    tenantName: "Acme Corp",
+    requestedBy: "founder",
+  };
+
+  it("runs all 5 provisioning steps and emits progress + completed events", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const workflowRunRepository = new InMemoryWorkflowRunRepository();
+    const eventPublisher: EventPublisher = {
+      publish: vi.fn(async () => undefined),
+    };
+    const worker = new WorkflowCallbackWorker({
+      outboxRepository,
+      workflowRunRepository,
+      eventPublisher,
+      runtimeStateVerifier: {
+        getTenantProvisioningRuntimeState: vi.fn(async () => {
+          throw new Error("should not be called on orchestrator path");
+        }),
+      },
+      provisioningClients: makeProvisioningClients(),
+    });
+
+    const result =
+      await worker.processTenantProvisioningCompletion(provisioningRequest);
+
+    expect(result.state).toBe("completed");
+    expect(result.history).toHaveLength(5);
+
+    const events = await outboxRepository.listUnconsumed(tenantId, 20);
+    const eventTypes = events.map((e) => e.eventType);
+
+    // 6 progress events (5 steps × 1 report each — except seed_founder_doc
+    // which reports at 85% and 100%) + 1 completed = up to 7 total outbox entries.
+    // There will be at least one progress + one completed.
+    expect(
+      eventTypes.filter((t) => t === "workflow.tenant_provisioning.progress.v1")
+        .length,
+    ).toBeGreaterThanOrEqual(5);
+    expect(eventTypes).toContain("workflow.tenant_provisioning.completed.v1");
+
+    const run = await workflowRunRepository.getByWorkflowId(
+      tenantId,
+      "wf-orch-1",
+    );
+    expect(run?.state).toBe("completed");
+  });
+
+  it("transitions workflow_runs from requested → in_progress → completed", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const workflowRunRepository = new InMemoryWorkflowRunRepository();
+    const worker = new WorkflowCallbackWorker({
+      outboxRepository,
+      workflowRunRepository,
+      eventPublisher: { publish: vi.fn(async () => undefined) },
+      runtimeStateVerifier: {
+        getTenantProvisioningRuntimeState: vi.fn(),
+      },
+      provisioningClients: makeProvisioningClients(),
+    });
+
+    const result = await worker.processTenantProvisioningCompletion({
+      ...provisioningRequest,
+      workflowId: "wf-orch-state",
+      dedupeKey: "wf-orch-state",
+    });
+
+    expect(result.state).toBe("completed");
+    const run = await workflowRunRepository.getByWorkflowId(
+      tenantId,
+      "wf-orch-state",
+    );
+    expect(run?.state).toBe("completed");
+  });
+
+  it("is idempotent on duplicate requests after completion", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const workflowRunRepository = new InMemoryWorkflowRunRepository();
+    const publishFn = vi.fn(async () => undefined);
+    const worker = new WorkflowCallbackWorker({
+      outboxRepository,
+      workflowRunRepository,
+      eventPublisher: { publish: publishFn },
+      runtimeStateVerifier: { getTenantProvisioningRuntimeState: vi.fn() },
+      provisioningClients: makeProvisioningClients(),
+    });
+
+    const req = {
+      ...provisioningRequest,
+      workflowId: "wf-orch-idem",
+      dedupeKey: "wf-orch-idem",
+    };
+
+    await worker.processTenantProvisioningCompletion(req);
+    const callCount = publishFn.mock.calls.length;
+
+    // Second call — already terminal, should return immediately without new publishes.
+    const result2 = await worker.processTenantProvisioningCompletion(req);
+    expect(result2.state).toBe("completed");
+    expect(publishFn.mock.calls.length).toBe(callCount);
+  });
+
+  it("emits failed event and transitions run to failed when orchestrator throws", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const workflowRunRepository = new InMemoryWorkflowRunRepository();
+    const eventPublisher: EventPublisher = {
+      publish: vi.fn(async () => undefined),
+    };
+
+    const failingClients: ProvisioningClients = {
+      ...makeProvisioningClients(),
+      paperclip: {
+        provisionCompany: vi.fn(async () => {
+          throw new Error("Paperclip API unreachable");
+        }),
+      },
+    };
+
+    const worker = new WorkflowCallbackWorker({
+      outboxRepository,
+      workflowRunRepository,
+      eventPublisher,
+      runtimeStateVerifier: { getTenantProvisioningRuntimeState: vi.fn() },
+      provisioningClients: failingClients,
+    });
+
+    const result = await worker.processTenantProvisioningCompletion({
+      ...provisioningRequest,
+      workflowId: "wf-orch-fail",
+      dedupeKey: "wf-orch-fail",
+    });
+
+    expect(result.state).toBe("failed");
+    expect(result.failureCode).toBe("PROVISIONING_ERROR");
+    expect(eventPublisher.publish).toHaveBeenCalledWith(
+      `t.${tenantId}.workflow.tenant_provisioning.failed.v1`,
+      expect.objectContaining({ failure_code: "PROVISIONING_ERROR" }),
+    );
+    const run = await workflowRunRepository.getByWorkflowId(
+      tenantId,
+      "wf-orch-fail",
     );
     expect(run?.state).toBe("failed");
   });

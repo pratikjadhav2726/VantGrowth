@@ -41,6 +41,13 @@ export class NatsJetStreamPublisher implements EventPublisher {
     return new NatsJetStreamPublisher(connection);
   }
 
+  static async connectRaw(
+    config: NatsPublisherConfig = natsConfigFromEnv(),
+  ): Promise<NatsConnection> {
+    const parsed = natsConfigSchema.parse(config);
+    return connect({ servers: parsed.servers, name: parsed.name });
+  }
+
   async publish(
     subject: string,
     payload: Record<string, unknown>,

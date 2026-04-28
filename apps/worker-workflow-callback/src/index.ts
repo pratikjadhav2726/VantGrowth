@@ -1,5 +1,11 @@
 import {
+  HttpGiteaProvisioningClient,
+  HttpMinioProvisioningClient,
   RestateHttpWorkflowClient,
+  StubGiteaProvisioningClient,
+  StubMinioProvisioningClient,
+  StubNatsProvisioningClient,
+  StubPaperclipProvisioningClient,
   restateConfigFromEnv,
 } from "@growthos/core";
 import {
@@ -10,9 +16,46 @@ import {
 import { createLogger, initOtelSdk } from "@growthos/observability";
 import { JSONCodec, connect } from "nats";
 import { NatsJetStreamPublisher } from "./nats-publisher.js";
+import type { ProvisioningClients } from "./workflow-callback-worker.js";
 import { WorkflowCallbackWorker } from "./workflow-callback-worker.js";
 
 const log = createLogger("growthos.worker-workflow-callback");
+
+/**
+ * Resolve provisioning clients from environment.
+ *
+ * Resolution order (all require ENABLE_DIRECT_PROVISIONING=true):
+ *   ENABLE_REAL_GITEA_CLIENT=true   → HttpGiteaProvisioningClient (GITEA_BASE_URL + GITEA_TOKEN required)
+ *   ENABLE_REAL_MINIO_CLIENT=true   → HttpMinioProvisioningClient (MINIO_ENDPOINT + credentials required)
+ *   (default)                       → StubXxxProvisioningClient (tests / local dev without live infra)
+ *
+ * Paperclip and NATS remain stubs until their corresponding HTTP clients are built.
+ */
+const resolveProvisioningClients = (): ProvisioningClients | undefined => {
+  if (process.env.ENABLE_DIRECT_PROVISIONING !== "true") return undefined;
+
+  const useRealGitea = process.env.ENABLE_REAL_GITEA_CLIENT === "true";
+  const useRealMinio = process.env.ENABLE_REAL_MINIO_CLIENT === "true";
+
+  log.info(
+    {
+      gitea: useRealGitea ? "http" : "stub",
+      minio: useRealMinio ? "http" : "stub",
+    },
+    "direct provisioning enabled",
+  );
+
+  return {
+    paperclip: new StubPaperclipProvisioningClient(),
+    gitea: useRealGitea
+      ? HttpGiteaProvisioningClient.fromEnv()
+      : new StubGiteaProvisioningClient(),
+    nats: new StubNatsProvisioningClient(),
+    minio: useRealMinio
+      ? HttpMinioProvisioningClient.fromEnv()
+      : new StubMinioProvisioningClient(),
+  };
+};
 
 export const createWorkflowCallbackWorkerFromEnv =
   async (): Promise<WorkflowCallbackWorker> => {
@@ -24,19 +67,35 @@ export const createWorkflowCallbackWorkerFromEnv =
       actorKind: "system",
     });
     const eventPublisher = await NatsJetStreamPublisher.connect();
-    const restateConfig = restateConfigFromEnv();
-    if (!restateConfig) {
-      throw new Error(
-        "RESTATE_BASE_URL is required for worker-workflow-callback runtime verification",
-      );
+    const provisioningClients = resolveProvisioningClients();
+
+    // Restate verifier is required only when not running the orchestrator path.
+    let runtimeStateVerifier: InstanceType<typeof RestateHttpWorkflowClient>;
+    if (!provisioningClients) {
+      const restateConfig = restateConfigFromEnv();
+      if (!restateConfig) {
+        throw new Error(
+          "RESTATE_BASE_URL is required when ENABLE_DIRECT_PROVISIONING is not set",
+        );
+      }
+      runtimeStateVerifier = new RestateHttpWorkflowClient(restateConfig);
+    } else {
+      // Provide a no-op verifier — it will never be called on the orchestrator path.
+      runtimeStateVerifier = {
+        getTenantProvisioningRuntimeState: async () => {
+          throw new Error(
+            "Restate verifier is disabled on direct provisioning path",
+          );
+        },
+      } as unknown as InstanceType<typeof RestateHttpWorkflowClient>;
     }
-    const runtimeStateVerifier = new RestateHttpWorkflowClient(restateConfig);
 
     return new WorkflowCallbackWorker({
       outboxRepository,
       workflowRunRepository,
       eventPublisher,
       runtimeStateVerifier,
+      ...(provisioningClients ? { provisioningClients } : {}),
     });
   };
 

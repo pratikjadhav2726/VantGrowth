@@ -10,6 +10,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -208,3 +209,112 @@ export const workflowRuns = growthos.table(
 
 export type WorkflowRunRow = typeof workflowRuns.$inferSelect;
 export type NewWorkflowRunRow = typeof workflowRuns.$inferInsert;
+
+// ─── playbook_versions ────────────────────────────────────────────────────────
+//
+// Stores versioned playbooks used by the Critique/Learning loop (Phase 1 S4/S5).
+// Each playbook is a JSON rubric that the Critique agent compares against a
+// generated artefact (blog_draft, intel_brief, etc.).  Retiring a version
+// (setting retired_at) deactivates it without deleting history.
+
+export const playbookTypeValues = [
+  "content_brief",
+  "intel_brief",
+  "blog_draft",
+  "custom",
+] as const;
+export type PlaybookTypeValue = (typeof playbookTypeValues)[number];
+
+export const playbookVersions = growthos.table(
+  "playbook_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull(),
+    playbookType: text("playbook_type").notNull().$type<PlaybookTypeValue>(),
+    version: numeric("version", { precision: 10, scale: 0 }).notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    content: jsonb("content").notNull().$type<Record<string, unknown>>(),
+    effectiveAt: timestamp("effective_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    retiredAt: timestamp("retired_at", { withTimezone: true }),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("playbook_versions_tenant_type_version_unique").on(
+      table.tenantId,
+      table.playbookType,
+      table.version,
+    ),
+    index("playbook_versions_tenant_type_retired_idx").on(
+      table.tenantId,
+      table.playbookType,
+      table.retiredAt,
+    ),
+    check(
+      "playbook_versions_type_check",
+      sql`${table.playbookType} IN ('content_brief', 'intel_brief', 'blog_draft', 'custom')`,
+    ),
+  ],
+);
+
+export type PlaybookVersion = typeof playbookVersions.$inferSelect;
+export type NewPlaybookVersion = typeof playbookVersions.$inferInsert;
+
+// ─── signal_events ────────────────────────────────────────────────────────────
+//
+// High-volume write path: the Signal Router writes all inbound signals here.
+// The Intel Director reads and processes them.  externalId is used for
+// deduplication against the source system; a partial unique index prevents
+// duplicates while allowing rows without an externalId.
+
+export const signalTypeValues = [
+  "competitive",
+  "community",
+  "icp",
+  "product",
+  "market",
+  "internal",
+] as const;
+export type SignalTypeValue = (typeof signalTypeValues)[number];
+
+export const signalEvents = growthos.table(
+  "signal_events",
+  {
+    id: bigserial("id", { mode: "bigint" }).primaryKey(),
+    tenantId: uuid("tenant_id").notNull(),
+    signalType: text("signal_type").notNull().$type<SignalTypeValue>(),
+    source: text("source").notNull(),
+    externalId: text("external_id"),
+    payload: jsonb("payload").notNull().$type<Record<string, unknown>>(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("signal_events_tenant_type_created_idx").on(
+      table.tenantId,
+      table.signalType,
+      table.createdAt.desc(),
+    ),
+    index("signal_events_tenant_unprocessed_idx")
+      .on(table.tenantId, table.id)
+      .where(sql`${table.processedAt} IS NULL`),
+    // Deduplicate by (tenant, source, externalId) when externalId is present.
+    uniqueIndex("signal_events_tenant_source_external_uniq")
+      .on(table.tenantId, table.source, table.externalId)
+      .where(sql`${table.externalId} IS NOT NULL`),
+    check(
+      "signal_events_type_check",
+      sql`${table.signalType} IN ('competitive', 'community', 'icp', 'product', 'market', 'internal')`,
+    ),
+  ],
+);
+
+export type SignalEvent = typeof signalEvents.$inferSelect;
+export type NewSignalEvent = typeof signalEvents.$inferInsert;

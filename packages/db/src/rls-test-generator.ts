@@ -146,4 +146,27 @@ export const GROWTHOS_RLS_TABLE_SPECS: RlsTableSpec[] = [
     `,
     cleanupSql: `DELETE FROM growthos.workflow_runs WHERE tenant_id = $1::uuid AND workflow_id = 'rls-test-workflow-run'`,
   },
+  {
+    qualifiedName: "growthos.playbook_versions",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      INSERT INTO growthos.playbook_versions
+        (tenant_id, playbook_type, version, name, content, created_by)
+      VALUES
+        ($1, 'custom', 0, 'rls-test-playbook', '{}'::jsonb, 'rls-test')
+      ON CONFLICT DO NOTHING
+    `,
+    cleanupSql: `DELETE FROM growthos.playbook_versions WHERE tenant_id = $1::uuid AND name = 'rls-test-playbook'`,
+  },
+  {
+    qualifiedName: "growthos.signal_events",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      INSERT INTO growthos.signal_events
+        (tenant_id, signal_type, source, payload)
+      VALUES
+        ($1, 'internal', 'rls-test', '{}'::jsonb)
+    `,
+    cleanupSql: `DELETE FROM growthos.signal_events WHERE tenant_id = $1::uuid AND source = 'rls-test'`,
+  },
 ];

@@ -17,7 +17,7 @@
  *   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5488/growthos_ci pnpm migrate:dry-run
  *   DATABASE_URL=... [NATS_SERVERS=...] pnpm seed:dev
  */
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { StringCodec, connect } from "nats";
 import { createDbFromEnv } from "./db.js";
 import {
@@ -25,6 +25,7 @@ import {
   eventOutbox,
   motionScores,
   motionStack,
+  playbookVersions,
   workflowRuns,
 } from "./schema.js";
 
@@ -145,6 +146,143 @@ async function main(): Promise<void> {
     .onConflictDoNothing();
 
   ok("growthos.workflow_runs  (seed-dev, completed)");
+
+  // ── playbook_versions ─────────────────────────────────────────────────────
+  // Seed a blog_draft rubric and a content_brief rubric for the dev tenant.
+  // These are used by the CritiqueWorker (playbook path) and the LearningWorker
+  // (feedback loop) during local development.
+
+  const blogDraftExists = await db
+    .select({ id: playbookVersions.id })
+    .from(playbookVersions)
+    .where(
+      and(
+        eq(playbookVersions.tenantId, DEV_TENANT_ID),
+        eq(playbookVersions.playbookType, "blog_draft"),
+        isNull(playbookVersions.retiredAt),
+      ),
+    )
+    .limit(1);
+
+  if (blogDraftExists.length === 0) {
+    await db.insert(playbookVersions).values({
+      tenantId: DEV_TENANT_ID,
+      playbookType: "blog_draft",
+      version: "1",
+      name: "Blog Draft Quality Rubric v1",
+      description:
+        "Standard rubric for evaluating blog draft quality. " +
+        "Checks for CTA, evidence, structure, readability, and brand voice.",
+      content: {
+        rubric: [
+          {
+            id: "bd-r1",
+            weight: 0.25,
+            description: "Content includes a clear call to action",
+            check: "has_cta",
+          },
+          {
+            id: "bd-r2",
+            weight: 0.2,
+            description: "Content includes quantitative evidence or statistics",
+            check: "has_evidence",
+          },
+          {
+            id: "bd-r3",
+            weight: 0.2,
+            description: "No forbidden corporate buzzwords",
+            check: "no_forbidden",
+          },
+          {
+            id: "bd-r4",
+            weight: 0.2,
+            description: "Word count within acceptable range (300–3000 words)",
+            check: "length_ok",
+          },
+          {
+            id: "bd-r5",
+            weight: 0.15,
+            description: "Article uses markdown headings for clear structure",
+            check: "has_headings",
+          },
+        ],
+        min_word_count: 300,
+        max_word_count: 3000,
+        forbidden_phrases: [
+          "market leader",
+          "industry-leading",
+          "best-in-class",
+          "world-class",
+          "revolutionary",
+          "cutting-edge",
+          "synergy",
+        ],
+      },
+      createdBy: "seed-dev",
+    });
+    ok("growthos.playbook_versions (blog_draft v1)");
+  } else {
+    skip("growthos.playbook_versions (blog_draft v1)");
+  }
+
+  const contentBriefExists = await db
+    .select({ id: playbookVersions.id })
+    .from(playbookVersions)
+    .where(
+      and(
+        eq(playbookVersions.tenantId, DEV_TENANT_ID),
+        eq(playbookVersions.playbookType, "content_brief"),
+        isNull(playbookVersions.retiredAt),
+      ),
+    )
+    .limit(1);
+
+  if (contentBriefExists.length === 0) {
+    await db.insert(playbookVersions).values({
+      tenantId: DEV_TENANT_ID,
+      playbookType: "content_brief",
+      version: "1",
+      name: "Content Brief Quality Rubric v1",
+      description:
+        "Standard rubric for evaluating content brief quality. " +
+        "Ensures the brief is actionable, evidence-backed, and audience-targeted.",
+      content: {
+        rubric: [
+          {
+            id: "cb-r1",
+            weight: 0.3,
+            description: "Brief specifies a clear hook for the opening",
+            check: "has_hook",
+          },
+          {
+            id: "cb-r2",
+            weight: 0.25,
+            description: "Brief identifies a specific target audience",
+            check: "has_evidence",
+          },
+          {
+            id: "cb-r3",
+            weight: 0.25,
+            description:
+              "Brief includes a call to action for the finished piece",
+            check: "has_cta",
+          },
+          {
+            id: "cb-r4",
+            weight: 0.2,
+            description: "Brief has sufficient detail (min 150 words)",
+            check: "length_ok",
+          },
+        ],
+        min_word_count: 150,
+        max_word_count: 1000,
+      },
+      createdBy: "seed-dev",
+    });
+    ok("growthos.playbook_versions (content_brief v1)");
+  } else {
+    skip("growthos.playbook_versions (content_brief v1)");
+  }
 
   // ── event_outbox sentinel ─────────────────────────────────────────────────
   await db.insert(eventOutbox).values({
