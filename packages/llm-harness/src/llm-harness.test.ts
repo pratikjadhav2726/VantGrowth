@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LlmCallLogRow, LlmCallLogSink } from "./llm-call-log-sink.js";
 import { StubLlmCallRunner } from "./llm-call-runner.js";
 import { OpenAiLlmCallRunner, registerModelPricing } from "./openai-runner.js";
 import {
@@ -333,6 +334,104 @@ describe("OpenAiLlmCallRunner", () => {
     });
     await expect(runner.run(template, { question: "?" })).rejects.toThrow();
     expect(calls).toBe(1); // no retries
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LlmCallRunOptions.tenantId / agentId / issueId context propagation
+// ---------------------------------------------------------------------------
+
+describe("OpenAiLlmCallRunner tenantId context forwarding", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("passes tenantId and agentId to logSink when provided in options", async () => {
+    const capturedRows: LlmCallLogRow[] = [];
+    const sink: LlmCallLogSink = {
+      log: async (row) => {
+        capturedRows.push(row);
+      },
+      flush: async () => {},
+    };
+
+    const client = makeOpenAiMock("result", {
+      prompt_tokens: 50,
+      completion_tokens: 20,
+      total_tokens: 70,
+    });
+    const runner = new OpenAiLlmCallRunner(client, { logSink: sink });
+
+    await runner.run(
+      definePrompt({ id: "ctx.test", version: "1.0.0", render: () => "test" }),
+      {},
+      { tenantId: "00000000-0000-4000-8000-000000000011", agentId: "agent-99" },
+    );
+
+    expect(capturedRows).toHaveLength(1);
+    const row = capturedRows[0];
+    if (!row) throw new Error("Expected a log row");
+    expect(row.tenantId).toBe("00000000-0000-4000-8000-000000000011");
+    expect(row.agentId).toBe("agent-99");
+  });
+
+  it("uses 'unknown' tenantId when not provided in options", async () => {
+    const capturedRows: LlmCallLogRow[] = [];
+    const sink: LlmCallLogSink = {
+      log: async (row) => {
+        capturedRows.push(row);
+      },
+      flush: async () => {},
+    };
+
+    const client = makeOpenAiMock("result", {
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      total_tokens: 15,
+    });
+    const runner = new OpenAiLlmCallRunner(client, { logSink: sink });
+
+    await runner.run(
+      definePrompt({ id: "ctx.noTenant", version: "1.0.0", render: () => "x" }),
+      {},
+    );
+
+    expect(capturedRows[0]?.tenantId).toBe("unknown");
+    expect("agentId" in (capturedRows[0] ?? {})).toBe(false);
+  });
+
+  it("forwards issueId to log row when supplied", async () => {
+    const capturedRows: LlmCallLogRow[] = [];
+    const sink: LlmCallLogSink = {
+      log: async (row) => {
+        capturedRows.push(row);
+      },
+      flush: async () => {},
+    };
+
+    const client = makeOpenAiMock("result", {
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      total_tokens: 15,
+    });
+    const runner = new OpenAiLlmCallRunner(client, { logSink: sink });
+
+    await runner.run(
+      definePrompt({ id: "ctx.issue", version: "1.0.0", render: () => "x" }),
+      {},
+      {
+        tenantId: "t-1",
+        issueId: "00000000-0000-4000-8000-000000000999",
+      },
+    );
+
+    expect(capturedRows[0]?.issueId).toBe(
+      "00000000-0000-4000-8000-000000000999",
+    );
   });
 });
 

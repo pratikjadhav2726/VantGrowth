@@ -1,10 +1,12 @@
 import { intelBriefV1Schema } from "@growthos/core";
 import { InMemoryOutboxRepository } from "@growthos/db";
+import { StubLlmCallRunner } from "@growthos/llm-harness";
 import { describe, expect, it, vi } from "vitest";
 import {
   type EventPublisher,
   IntelDirectorWorker,
   generateDeterministicBrief,
+  generateLlmBrief,
   intelBriefRequestedV1Schema,
 } from "./intel-director-worker.js";
 
@@ -185,5 +187,157 @@ describe("IntelDirectorWorker", () => {
     expect(result.recommended_focus).toContain(
       "Developer tools for indie hackers",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateLlmBrief — LLM-backed path
+// ---------------------------------------------------------------------------
+
+const VALID_LLM_BRIEF_JSON = (tenantId: string) =>
+  JSON.stringify({
+    schema_version: "intel_brief.v1",
+    tenant_id: tenantId,
+    brief_id: "22222222-2222-4222-8222-222222222222",
+    generated_at: "2026-04-28T10:00:00.000Z",
+    period: { from: "2026-04-01", to: "2026-04-28" },
+    competitive_signals: [],
+    community_signals: [],
+    content_opportunities: [
+      {
+        opportunity_id: "33333333-3333-4333-8333-333333333333",
+        title: "LLM-generated opportunity",
+        rationale: "Competitor weakness identified via signal analysis.",
+        urgency: "this_week",
+        motion_fit: ["inbound_content"],
+        score: 0.82,
+      },
+    ],
+    recommended_focus:
+      "Publish founder-voice content addressing competitor's pricing gap.",
+  });
+
+describe("generateLlmBrief", () => {
+  const baseRequest = intelBriefRequestedV1Schema.parse({
+    schema_version: "intel_brief_requested.v1",
+    request_id: REQUEST_ID,
+    tenant_id: TENANT_ID,
+    period_from: "2026-04-01",
+    period_to: "2026-04-28",
+  });
+
+  it("returns a parsed IntelBriefV1 when the LLM returns valid JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      "intel-brief.generate-structured": VALID_LLM_BRIEF_JSON(TENANT_ID),
+    });
+    const result = await generateLlmBrief(baseRequest, runner);
+
+    expect(result).not.toBeNull();
+    expect(result?.schema_version).toBe("intel_brief.v1");
+    expect(result?.content_opportunities[0]?.title).toBe(
+      "LLM-generated opportunity",
+    );
+    expect(result?.content_opportunities[0]?.score).toBe(0.82);
+  });
+
+  it("returns null when the LLM response contains no JSON object", async () => {
+    const runner = new StubLlmCallRunner({
+      "intel-brief.generate-structured": "Sorry, I cannot generate this brief.",
+    });
+    const result = await generateLlmBrief(baseRequest, runner);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the LLM JSON fails schema validation", async () => {
+    const runner = new StubLlmCallRunner({
+      "intel-brief.generate-structured": JSON.stringify({
+        schema_version: "wrong_version",
+        tenant_id: TENANT_ID,
+      }),
+    });
+    const result = await generateLlmBrief(baseRequest, runner);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the LLM runner throws", async () => {
+    const runner = {
+      run: async () => {
+        throw new Error("LLM unavailable");
+      },
+    };
+    const result = await generateLlmBrief(baseRequest, runner);
+    expect(result).toBeNull();
+  });
+
+  it("injects the canonical tenant_id from the request, not from the LLM response", async () => {
+    const runner = new StubLlmCallRunner({
+      "intel-brief.generate-structured": VALID_LLM_BRIEF_JSON("wrong-tenant"),
+    });
+    const result = await generateLlmBrief(baseRequest, runner);
+    expect(result?.tenant_id).toBe(TENANT_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IntelDirectorWorker — LLM-backed integration path
+// ---------------------------------------------------------------------------
+
+describe("IntelDirectorWorker (LLM path)", () => {
+  const makeWorkerWithLlm = (
+    stubResponse: string = VALID_LLM_BRIEF_JSON(TENANT_ID),
+  ) => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const events: Array<{ subject: string; payload: Record<string, unknown> }> =
+      [];
+    const eventPublisher: EventPublisher = {
+      publish: vi.fn(async (subject, payload) => {
+        events.push({ subject, payload });
+      }),
+    };
+    const llmCallRunner = new StubLlmCallRunner({
+      "intel-brief.generate-structured": stubResponse,
+    });
+    const worker = new IntelDirectorWorker({
+      outboxRepository,
+      eventPublisher,
+      llmCallRunner,
+    });
+    return { worker, outboxRepository, events, llmCallRunner };
+  };
+
+  it("uses LLM brief when runner produces valid JSON", async () => {
+    const { worker } = makeWorkerWithLlm();
+
+    const result = await worker.processBriefRequest(makeValidRequest());
+
+    expect(result._llmGenerated).toBe(true);
+    expect(result.content_opportunities[0]?.title).toBe(
+      "LLM-generated opportunity",
+    );
+  });
+
+  it("falls back to deterministic brief when LLM returns invalid JSON", async () => {
+    const { worker } = makeWorkerWithLlm("Not a JSON response");
+
+    const result = await worker.processBriefRequest(makeValidRequest());
+
+    expect(result._llmGenerated).toBe(false);
+    expect(result.content_opportunities[0]?.title).toContain("Baseline");
+  });
+
+  it("publishes to NATS via tenant-scoped subject", async () => {
+    const { worker, events } = makeWorkerWithLlm();
+    await worker.processBriefRequest(makeValidRequest());
+
+    expect(events[0]?.subject).toBe(`t.${TENANT_ID}.intel_brief.v1`);
+  });
+
+  it("records the LLM call in the runner's call history", async () => {
+    const { worker, llmCallRunner } = makeWorkerWithLlm();
+    await worker.processBriefRequest(makeValidRequest());
+
+    expect(
+      llmCallRunner.callsFor("intel-brief.generate-structured"),
+    ).toHaveLength(1);
   });
 });

@@ -238,7 +238,19 @@ export class OpenAiLlmCallRunner implements LlmCallRunner {
 
     // Write to log sink after the span ends.  Sink failures are swallowed.
     if (this.config.logSink) {
-      const logRow = buildLogRow("unknown", template.id, result);
+      const logRow = buildLogRow(
+        options?.tenantId ?? "unknown",
+        template.id,
+        result,
+        {
+          ...(options?.agentId !== undefined
+            ? { agentId: options.agentId }
+            : {}),
+          ...(options?.issueId !== undefined
+            ? { issueId: options.issueId }
+            : {}),
+        },
+      );
       this.config.logSink.log(logRow).catch((e: unknown) => {
         console.error(
           "[llm-harness] log sink error:",

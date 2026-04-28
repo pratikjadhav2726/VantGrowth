@@ -29,6 +29,15 @@ export interface LlmCallRunOptions {
   retries?: number;
   /** Base delay for exponential backoff in ms. Default: 500 */
   retryBaseDelayMs?: number;
+  /**
+   * Tenant context — written to `llm_call_logs` via the configured LlmCallLogSink.
+   * Required for production cost attribution. Omit only in tests.
+   */
+  tenantId?: string;
+  /** Paperclip agentId driving this call (written to log row). */
+  agentId?: string;
+  /** Paperclip issueId associated with this call (written to log row). */
+  issueId?: string;
 }
 
 export interface LlmCallResult {

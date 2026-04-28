@@ -204,6 +204,9 @@ importers:
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@growthos/llm-harness':
+        specifier: workspace:*
+        version: link:../../packages/llm-harness
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability

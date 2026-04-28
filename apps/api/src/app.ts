@@ -9,8 +9,10 @@ import {
 } from "@growthos/core";
 import {
   type ApprovalFeedbackRepository,
+  type MotionStackRepository,
   type OutboxRepository,
   PostgresApprovalFeedbackRepository,
+  PostgresMotionStackRepository,
   PostgresOutboxRepository,
   PostgresSignalEventsRepository,
   PostgresWorkflowRunRepository,
@@ -28,6 +30,7 @@ import { Hono } from "hono";
 import { mapErrorToResponse } from "./error-middleware.js";
 import { createApprovalRoutes } from "./routes/approvals.js";
 import { createCommandRoutes } from "./routes/commands.js";
+import { createMotionRoutes } from "./routes/motion.js";
 import { createPaperclipRoutes } from "./routes/paperclip.js";
 import { createSignalRoutes } from "./routes/signals.js";
 import { createWorkflowRoutes } from "./routes/workflows.js";
@@ -42,6 +45,7 @@ export interface AppDependencies {
   runtimeCallbackSecret?: string;
   signalEventsRepository?: SignalEventsRepository;
   approvalFeedbackRepository?: ApprovalFeedbackRepository;
+  motionStackRepository?: MotionStackRepository;
 }
 
 const resolvePaperclipClient = (
@@ -112,6 +116,14 @@ const resolveApprovalFeedbackRepository = (
   return new PostgresApprovalFeedbackRepository(createDbFromEnv());
 };
 
+const resolveMotionStackRepository = (
+  deps: AppDependencies,
+): MotionStackRepository | null => {
+  if (deps.motionStackRepository) return deps.motionStackRepository;
+  if (!process.env.DATABASE_URL) return null;
+  return new PostgresMotionStackRepository(createDbFromEnv());
+};
+
 export const createApp = (deps: AppDependencies = {}): Hono => {
   const app = new Hono();
 
@@ -166,6 +178,12 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
     createApprovalRoutes({
       outboxRepository: resolveOutboxRepository(deps),
       approvalFeedbackRepository: resolveApprovalFeedbackRepository(deps),
+    }),
+  );
+  app.route(
+    "/v1/motion",
+    createMotionRoutes({
+      motionStackRepository: resolveMotionStackRepository(deps),
     }),
   );
 

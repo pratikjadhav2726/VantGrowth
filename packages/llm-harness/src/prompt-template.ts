@@ -116,6 +116,89 @@ export const BLOG_DRAFT_GENERATE_PROMPT = definePrompt<{
     `Write a full blog post for: "${title}". Opening hook: "${hook}". Outline: ${outline}. Tone: ${toneNotes}. Primary keyword: "${primaryKeyword}". Target 1400 words. Include at least one statistic or proof point. End with a CTA.`,
 });
 
+/**
+ * INTEL_BRIEF_GENERATE_STRUCTURED_PROMPT
+ *
+ * Upgraded version of the intel brief generator that asks the LLM to produce
+ * a structured JSON payload conforming to IntelBriefV1.  The caller is
+ * responsible for parsing and validating the JSON; on failure it falls back to
+ * the deterministic generator.
+ */
+export const INTEL_BRIEF_GENERATE_STRUCTURED_PROMPT = definePrompt<{
+  tenantId: string;
+  periodFrom: string;
+  periodTo: string;
+  motionContext: string;
+  signalSummary: string;
+}>({
+  id: "intel-brief.generate-structured",
+  version: "1.0.0",
+  system:
+    "You are a B2B growth strategist specialising in founder-led GTM. " +
+    "Return ONLY valid JSON — no markdown fences, no commentary. " +
+    "The JSON must conform to the IntelBriefV1 schema.",
+  render: ({ tenantId, periodFrom, periodTo, motionContext, signalSummary }) =>
+    `Generate an intel brief for tenant ${tenantId} covering ${periodFrom} to ${periodTo}.
+Motion context: ${motionContext}.
+Signal summary: ${signalSummary || "No signals ingested yet — generate baseline opportunities."}
+
+Respond with a JSON object matching this exact shape (all fields required):
+{
+  "schema_version": "intel_brief.v1",
+  "tenant_id": "<tenantId>",
+  "brief_id": "<uuid>",
+  "generated_at": "<ISO 8601>",
+  "period": { "from": "<YYYY-MM-DD>", "to": "<YYYY-MM-DD>" },
+  "competitive_signals": [],
+  "community_signals": [],
+  "content_opportunities": [
+    {
+      "opportunity_id": "<uuid>",
+      "title": "<string>",
+      "rationale": "<string>",
+      "urgency": "this_week | this_month | next_quarter",
+      "motion_fit": ["<motion_label>"],
+      "score": 0.0
+    }
+  ],
+  "recommended_focus": "<string>"
+}`,
+});
+
+/**
+ * SIGNAL_GRADE_PROMPT
+ *
+ * Grades a single raw signal event, extracting structured quality metadata:
+ * relevance score, urgency, categorised topic, and action recommendations.
+ * Used by the signal routing pipeline before writing to signal_events.
+ */
+export const SIGNAL_GRADE_PROMPT = definePrompt<{
+  signalType: string;
+  source: string;
+  rawPayload: string;
+  motionContext: string;
+}>({
+  id: "signal.grade",
+  version: "1.0.0",
+  system:
+    "You are a B2B GTM intelligence analyst. " +
+    "Grade the relevance and urgency of a raw signal for a founder-led GTM motion. " +
+    "Return ONLY valid JSON — no markdown fences.",
+  render: ({ signalType, source, rawPayload, motionContext }) =>
+    `Grade this ${signalType} signal from "${source}" for a founder with motion context: ${motionContext}.
+
+Signal payload:
+${rawPayload}
+
+Respond with JSON:
+{
+  "relevance": 0.0,
+  "urgency": "low | medium | high",
+  "topic_category": "<short label>",
+  "action_recommendations": ["<string>"]
+}`,
+});
+
 export const CRITIQUE_EVALUATE_PROMPT = definePrompt<{
   artifactKind: string;
   candidateOutput: string;

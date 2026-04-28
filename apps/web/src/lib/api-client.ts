@@ -121,14 +121,45 @@ export const submitApprovalDecision = (
 // Motion stack types + client methods
 // ---------------------------------------------------------------------------
 
-export const motionScoreResponseSchema = z.object({
-  scorerVersion: z.string(),
+// ---------------------------------------------------------------------------
+// Motion stack types + client methods
+// ---------------------------------------------------------------------------
+
+export const motionScoreRowSchema = z.object({
+  id: z.string(),
   tenantId: z.string(),
+  scoredAt: z.string(),
+  scorerVersion: z.string(),
   scores: z.record(z.number()),
-  primaryMotion: z.string().optional(),
-  secondaryMotions: z.array(z.string()).optional(),
-  confidence: z.number().optional(),
+  inputsDigest: z.string(),
+  rationale: z.array(z.string()),
+  createdAt: z.string(),
 });
+export type MotionScoreRow = z.infer<typeof motionScoreRowSchema>;
+
+export const motionStackRowSchema = z.object({
+  id: z.string(),
+  tenantId: z.string(),
+  primaryMotions: z.array(z.string()),
+  secondaryMotions: z.array(z.string()),
+  observeOnly: z.array(z.string()),
+  deactivated: z.array(z.string()),
+  version: z.string(),
+  createdAt: z.string(),
+});
+export type MotionStackRow = z.infer<typeof motionStackRowSchema>;
+
+export const motionOverviewSchema = z.object({
+  latestScore: motionScoreRowSchema.nullable(),
+  latestStack: motionStackRowSchema.nullable(),
+  recentScores: z.array(motionScoreRowSchema),
+});
+export type MotionOverview = z.infer<typeof motionOverviewSchema>;
+
+export const getMotionOverview = (tenantId: string, historyLimit = 7) =>
+  apiFetch(`/v1/motion?historyLimit=${historyLimit}`, tenantId, {
+    schema: motionOverviewSchema,
+  });
 
 // ---------------------------------------------------------------------------
 // Signal ingestion

@@ -11,6 +11,7 @@ const navItems = [
   { href: "/approvals", label: "Approvals" },
   { href: "/motion", label: "Motion" },
   { href: "/signals", label: "Signals" },
+  { href: "/weekly-review", label: "Weekly Review" },
 ];
 
 export default function RootLayout({

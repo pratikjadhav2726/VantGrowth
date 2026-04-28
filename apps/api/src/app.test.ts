@@ -3,6 +3,7 @@ import { PaperclipClient, type PaperclipClientPort } from "@growthos/adapter";
 import type { RestateWorkflowClientPort } from "@growthos/core";
 import {
   InMemoryApprovalFeedbackRepository,
+  InMemoryMotionStackRepository,
   InMemoryOutboxRepository,
   InMemorySignalEventsRepository,
   InMemoryWorkflowRunRepository,
@@ -985,5 +986,88 @@ describe("POST /v1/approvals/decide", () => {
     });
 
     expect(res.status).toBe(503);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /v1/motion
+// ---------------------------------------------------------------------------
+
+describe("GET /v1/motion", () => {
+  it("returns null latestScore and latestStack when no data exists", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    const app = createApp({ motionStackRepository });
+
+    const res = await app.request("http://localhost/v1/motion", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      latestScore: null;
+      latestStack: null;
+      recentScores: unknown[];
+    };
+    expect(body.latestScore).toBeNull();
+    expect(body.latestStack).toBeNull();
+    expect(body.recentScores).toEqual([]);
+  });
+
+  it("returns the most recent score row when data exists", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    await motionStackRepository.recordScore({
+      tenantId,
+      scorerVersion: "motion_scorer.v1",
+      scores: { plg: 0.85, inbound_content: 0.71 },
+      inputsDigest: "abc123",
+      rationale: ["High PLG signal"],
+    });
+    const app = createApp({ motionStackRepository });
+
+    const res = await app.request("http://localhost/v1/motion", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      latestScore: { scorerVersion: string; scores: Record<string, number> };
+    };
+    expect(body.latestScore?.scorerVersion).toBe("motion_scorer.v1");
+    expect(body.latestScore?.scores?.plg).toBe(0.85);
+  });
+
+  it("returns 400 when X-Tenant-Id is missing", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    const app = createApp({ motionStackRepository });
+    const res = await app.request("http://localhost/v1/motion");
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 503 when motionStackRepository is not configured", async () => {
+    const app = createApp();
+    const res = await app.request("http://localhost/v1/motion", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+    expect(res.status).toBe(503);
+  });
+
+  it("respects historyLimit query param", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    for (let i = 0; i < 5; i++) {
+      await motionStackRepository.recordScore({
+        tenantId,
+        scorerVersion: "motion_scorer.v1",
+        scores: { plg: i * 0.1 },
+        inputsDigest: `d-${i}`,
+        rationale: [],
+      });
+    }
+    const app = createApp({ motionStackRepository });
+
+    const res = await app.request("http://localhost/v1/motion?historyLimit=3", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+    const body = (await res.json()) as { recentScores: unknown[] };
+    expect(body.recentScores).toHaveLength(3);
   });
 });
