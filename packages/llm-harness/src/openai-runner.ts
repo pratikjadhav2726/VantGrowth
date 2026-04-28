@@ -18,6 +18,7 @@
 
 import { SpanKind, SpanStatusCode, getTracer } from "@growthos/observability";
 import OpenAI from "openai";
+import { type LlmCallLogSink, buildLogRow } from "./llm-call-log-sink.js";
 import type {
   LlmCallResult,
   LlmCallRunOptions,
@@ -114,6 +115,12 @@ export interface OpenAiLlmCallRunnerConfig {
   defaultRetries?: number;
   /** Base delay for exponential backoff. Default: 500ms */
   defaultRetryBaseDelayMs?: number;
+  /**
+   * Optional sink for recording LLM call logs (tokens, cost, latency).
+   * When provided, a log row is written after every successful call.
+   * Sink failures are swallowed — they never propagate to callers.
+   */
+  logSink?: LlmCallLogSink;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +140,8 @@ export class OpenAiLlmCallRunner implements LlmCallRunner {
       defaultMaxTokens: config.defaultMaxTokens ?? 2048,
       defaultRetries: config.defaultRetries ?? 3,
       defaultRetryBaseDelayMs: config.defaultRetryBaseDelayMs ?? 500,
-    };
+      ...(config.logSink !== undefined ? { logSink: config.logSink } : {}),
+    } as Required<OpenAiLlmCallRunnerConfig>;
   }
 
   static fromEnv(config: OpenAiLlmCallRunnerConfig = {}): OpenAiLlmCallRunner {
@@ -226,6 +234,17 @@ export class OpenAiLlmCallRunner implements LlmCallRunner {
       throw err;
     } finally {
       span.end();
+    }
+
+    // Write to log sink after the span ends.  Sink failures are swallowed.
+    if (this.config.logSink) {
+      const logRow = buildLogRow("unknown", template.id, result);
+      this.config.logSink.log(logRow).catch((e: unknown) => {
+        console.error(
+          "[llm-harness] log sink error:",
+          e instanceof Error ? e.message : String(e),
+        );
+      });
     }
 
     return result;

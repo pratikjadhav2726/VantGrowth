@@ -40,6 +40,30 @@ PARTITION BY toYYYYMM(recorded_at)
 ORDER BY (tenant_id, recorded_at, event_id)
 TTL recorded_at + INTERVAL 18 MONTH;
 
+-- llm_call_logs: per-call LLM observability — tokens, latency, cost, cache status.
+-- Written by LlmCallLogSink (batched HTTP inserts); never mutated after insert.
+CREATE TABLE IF NOT EXISTS growthos.llm_call_logs
+(
+    tenant_id       UUID                           NOT NULL,
+    call_id         UUID                           NOT NULL DEFAULT generateUUIDv4(),
+    prompt_id       LowCardinality(String)         NOT NULL,
+    prompt_version  LowCardinality(String)         NOT NULL,
+    model           LowCardinality(String)         NOT NULL,
+    input_tokens    UInt32                         NOT NULL DEFAULT 0,
+    output_tokens   UInt32                         NOT NULL DEFAULT 0,
+    latency_ms      UInt32                         NOT NULL DEFAULT 0,
+    cost_usd        Decimal(14, 8)                 NOT NULL DEFAULT 0,
+    cached          Bool                           NOT NULL DEFAULT false,
+    agent_id        Nullable(String),
+    issue_id        Nullable(UUID),
+    called_at       DateTime64(3, 'UTC')           NOT NULL,
+    _ingested_at    DateTime64(3, 'UTC')           DEFAULT now64()
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(called_at)
+ORDER BY (tenant_id, called_at, call_id)
+TTL called_at + INTERVAL 24 MONTH;
+
 -- signal_attribution: raw attribution touchpoints per tenant.
 CREATE TABLE IF NOT EXISTS growthos.signal_attribution
 (

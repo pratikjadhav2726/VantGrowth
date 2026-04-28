@@ -2,7 +2,9 @@ import { createHmac } from "node:crypto";
 import { PaperclipClient, type PaperclipClientPort } from "@growthos/adapter";
 import type { RestateWorkflowClientPort } from "@growthos/core";
 import {
+  InMemoryApprovalFeedbackRepository,
   InMemoryOutboxRepository,
+  InMemorySignalEventsRepository,
   InMemoryWorkflowRunRepository,
 } from "@growthos/db";
 import { describe, expect, it, vi } from "vitest";
@@ -754,5 +756,234 @@ describe("API app", () => {
 
     expect(response.status).toBe(202);
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/signals
+// ---------------------------------------------------------------------------
+
+describe("POST /v1/signals", () => {
+  const makeSignalBody = (overrides: Record<string, unknown> = {}) => ({
+    signalType: "competitive",
+    source: "twitter",
+    payload: { text: "Competitor launched feature X" },
+    ...overrides,
+  });
+
+  it("ingests a valid signal and returns 202 with inserted=true", async () => {
+    const signalEventsRepository = new InMemorySignalEventsRepository();
+    const app = createApp({ signalEventsRepository });
+
+    const res = await app.request("http://localhost/v1/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify(makeSignalBody()),
+    });
+
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { inserted: boolean; signalId: string };
+    expect(body.inserted).toBe(true);
+    expect(body.signalId).toBeDefined();
+  });
+
+  it("returns inserted=false for duplicate externalId", async () => {
+    const signalEventsRepository = new InMemorySignalEventsRepository();
+    const app = createApp({ signalEventsRepository });
+
+    const payload = makeSignalBody({ externalId: "sig-ext-001" });
+    await app.request("http://localhost/v1/signals", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Tenant-Id": tenantId },
+      body: JSON.stringify(payload),
+    });
+    const res2 = await app.request("http://localhost/v1/signals", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Tenant-Id": tenantId },
+      body: JSON.stringify(payload),
+    });
+
+    const body = (await res2.json()) as { inserted: boolean };
+    expect(body.inserted).toBe(false);
+  });
+
+  it("returns 400 when X-Tenant-Id header is missing", async () => {
+    const signalEventsRepository = new InMemorySignalEventsRepository();
+    const app = createApp({ signalEventsRepository });
+
+    const res = await app.request("http://localhost/v1/signals", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(makeSignalBody()),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 for invalid signalType", async () => {
+    const signalEventsRepository = new InMemorySignalEventsRepository();
+    const app = createApp({ signalEventsRepository });
+
+    const res = await app.request("http://localhost/v1/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify(makeSignalBody({ signalType: "unknown_type" })),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 503 when signalEventsRepository is not configured", async () => {
+    const app = createApp(); // no DATABASE_URL set → no repository
+
+    const res = await app.request("http://localhost/v1/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify(makeSignalBody()),
+    });
+
+    expect(res.status).toBe(503);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /v1/approvals + POST /v1/approvals/decide
+// ---------------------------------------------------------------------------
+
+describe("GET /v1/approvals", () => {
+  it("returns pending outbox events matching outputType filter", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    await outboxRepository.enqueue({
+      tenantId,
+      eventType: "blog_draft.v1",
+      idempotencyKey: "draft-1",
+      payload: { draft_id: "d-001", title: "PLG Explained" },
+    });
+    await outboxRepository.enqueue({
+      tenantId,
+      eventType: "content_brief.v1",
+      idempotencyKey: "brief-1",
+      payload: { brief_id: "b-001" },
+    });
+
+    const app = createApp({ outboxRepository });
+    const res = await app.request(
+      "http://localhost/v1/approvals?outputType=blog_draft.v1",
+      { headers: { "X-Tenant-Id": tenantId } },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      items: { outputType: string }[];
+      total: number;
+    };
+    expect(body.total).toBe(1);
+    expect(body.items[0]?.outputType).toBe("blog_draft.v1");
+  });
+
+  it("returns 400 when X-Tenant-Id is missing", async () => {
+    const app = createApp({ outboxRepository: new InMemoryOutboxRepository() });
+    const res = await app.request("http://localhost/v1/approvals");
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /v1/approvals/decide", () => {
+  it("records an approval decision and returns 202", async () => {
+    const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
+    const app = createApp({ approvalFeedbackRepository });
+
+    const res = await app.request("http://localhost/v1/approvals/decide", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        issueId: "00000000-0000-4000-8000-000000000101",
+        outputType: "blog_draft.v1",
+        action: "approved",
+        learnOptIn: true,
+      }),
+    });
+
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as {
+      accepted: boolean;
+      feedbackId: string;
+      action: string;
+    };
+    expect(body.accepted).toBe(true);
+    expect(body.action).toBe("approved");
+    expect(body.feedbackId).toBeDefined();
+  });
+
+  it("accepts reject decision with reviewerNote", async () => {
+    const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
+    const app = createApp({ approvalFeedbackRepository });
+
+    const res = await app.request("http://localhost/v1/approvals/decide", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        issueId: "00000000-0000-4000-8000-000000000102",
+        outputType: "blog_draft.v1",
+        action: "rejected",
+        reviewerNote: "Too promotional, rewrite from scratch",
+        learnOptIn: true,
+      }),
+    });
+
+    expect(res.status).toBe(202);
+  });
+
+  it("returns 400 for invalid action value", async () => {
+    const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
+    const app = createApp({ approvalFeedbackRepository });
+
+    const res = await app.request("http://localhost/v1/approvals/decide", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        issueId: "00000000-0000-4000-8000-000000000103",
+        outputType: "blog_draft.v1",
+        action: "auto_approved", // not allowed via API
+      }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 503 when approvalFeedbackRepository is not configured", async () => {
+    const app = createApp();
+    const res = await app.request("http://localhost/v1/approvals/decide", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        issueId: "00000000-0000-4000-8000-000000000104",
+        outputType: "blog_draft.v1",
+        action: "approved",
+      }),
+    });
+
+    expect(res.status).toBe(503);
   });
 });

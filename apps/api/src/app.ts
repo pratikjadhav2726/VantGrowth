@@ -8,9 +8,13 @@ import {
   scoreMotions,
 } from "@growthos/core";
 import {
+  type ApprovalFeedbackRepository,
   type OutboxRepository,
+  PostgresApprovalFeedbackRepository,
   PostgresOutboxRepository,
+  PostgresSignalEventsRepository,
   PostgresWorkflowRunRepository,
+  type SignalEventsRepository,
   type WorkflowRunRepository,
   createDbFromEnv,
 } from "@growthos/db";
@@ -22,8 +26,10 @@ import {
 } from "@growthos/observability";
 import { Hono } from "hono";
 import { mapErrorToResponse } from "./error-middleware.js";
+import { createApprovalRoutes } from "./routes/approvals.js";
 import { createCommandRoutes } from "./routes/commands.js";
 import { createPaperclipRoutes } from "./routes/paperclip.js";
+import { createSignalRoutes } from "./routes/signals.js";
 import { createWorkflowRoutes } from "./routes/workflows.js";
 
 export const log = createLogger("growthos.api");
@@ -34,6 +40,8 @@ export interface AppDependencies {
   workflowRunRepository?: WorkflowRunRepository;
   restateWorkflowClient?: RestateWorkflowClientPort;
   runtimeCallbackSecret?: string;
+  signalEventsRepository?: SignalEventsRepository;
+  approvalFeedbackRepository?: ApprovalFeedbackRepository;
 }
 
 const resolvePaperclipClient = (
@@ -88,6 +96,22 @@ const resolveRestateWorkflowClient = (
 const resolveRuntimeCallbackSecret = (deps: AppDependencies): string | null =>
   deps.runtimeCallbackSecret ?? process.env.RESTATE_CALLBACK_SECRET ?? null;
 
+const resolveSignalEventsRepository = (
+  deps: AppDependencies,
+): SignalEventsRepository | null => {
+  if (deps.signalEventsRepository) return deps.signalEventsRepository;
+  if (!process.env.DATABASE_URL) return null;
+  return new PostgresSignalEventsRepository(createDbFromEnv());
+};
+
+const resolveApprovalFeedbackRepository = (
+  deps: AppDependencies,
+): ApprovalFeedbackRepository | null => {
+  if (deps.approvalFeedbackRepository) return deps.approvalFeedbackRepository;
+  if (!process.env.DATABASE_URL) return null;
+  return new PostgresApprovalFeedbackRepository(createDbFromEnv());
+};
+
 export const createApp = (deps: AppDependencies = {}): Hono => {
   const app = new Hono();
 
@@ -129,6 +153,19 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
       workflowRunRepository: resolveWorkflowRunRepository(deps),
       restateWorkflowClient: resolveRestateWorkflowClient(deps),
       runtimeCallbackSecret: resolveRuntimeCallbackSecret(deps),
+    }),
+  );
+  app.route(
+    "/v1/signals",
+    createSignalRoutes({
+      signalEventsRepository: resolveSignalEventsRepository(deps),
+    }),
+  );
+  app.route(
+    "/v1/approvals",
+    createApprovalRoutes({
+      outboxRepository: resolveOutboxRepository(deps),
+      approvalFeedbackRepository: resolveApprovalFeedbackRepository(deps),
     }),
   );
 

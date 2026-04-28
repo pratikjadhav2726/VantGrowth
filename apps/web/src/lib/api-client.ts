@@ -1,0 +1,165 @@
+/**
+ * GrowthOS API client — typed wrappers for the @growthos/api Hono server.
+ *
+ * All methods:
+ *   - Accept a `tenantId` parameter (sent as X-Tenant-Id header).
+ *   - Throw `ApiError` on non-2xx responses.
+ *   - Return typed response shapes validated by Zod at runtime.
+ */
+
+import { z } from "zod";
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+const API_BASE =
+  process.env.GROWTHOS_API_BASE_URL ??
+  process.env.NEXT_PUBLIC_GROWTHOS_API_BASE_URL ??
+  "http://localhost:3000";
+
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly body?: unknown,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared fetch helper
+// ---------------------------------------------------------------------------
+
+async function apiFetch<T>(
+  path: string,
+  tenantId: string,
+  options: RequestInit & { schema: z.ZodType<T> },
+): Promise<T> {
+  const { schema, ...fetchOptions } = options;
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...fetchOptions,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Tenant-Id": tenantId,
+      ...(fetchOptions.headers as Record<string, string> | undefined),
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(res.status, `API request failed: ${res.status}`, body);
+  }
+
+  return schema.parse(await res.json());
+}
+
+// ---------------------------------------------------------------------------
+// Approval queue types + client methods
+// ---------------------------------------------------------------------------
+
+export const approvalItemSchema = z.object({
+  eventId: z.string(),
+  tenantId: z.string(),
+  outputType: z.string(),
+  payload: z.record(z.unknown()),
+  enqueuedAt: z.string(),
+  status: z.literal("pending"),
+});
+export type ApprovalItem = z.infer<typeof approvalItemSchema>;
+
+export const approvalListResponseSchema = z.object({
+  items: z.array(approvalItemSchema),
+  total: z.number(),
+});
+
+export const approvalDecisionResponseSchema = z.object({
+  accepted: z.boolean(),
+  feedbackId: z.string(),
+  issueId: z.string(),
+  action: z.string(),
+  tenantId: z.string(),
+  decidedAt: z.string(),
+});
+export type ApprovalDecisionResponse = z.infer<
+  typeof approvalDecisionResponseSchema
+>;
+
+export const listApprovals = (
+  tenantId: string,
+  opts: { outputType?: string; limit?: number } = {},
+) =>
+  apiFetch(
+    `/v1/approvals?outputType=${opts.outputType ?? "blog_draft.v1"}&limit=${opts.limit ?? 20}`,
+    tenantId,
+    { schema: approvalListResponseSchema },
+  );
+
+export const submitApprovalDecision = (
+  tenantId: string,
+  decision: {
+    issueId: string;
+    outputType: string;
+    action: "approved" | "edited_then_approved" | "rejected";
+    reviewerNote?: string;
+    learnOptIn?: boolean;
+  },
+) =>
+  apiFetch("/v1/approvals/decide", tenantId, {
+    method: "POST",
+    body: JSON.stringify(decision),
+    schema: approvalDecisionResponseSchema,
+  });
+
+// ---------------------------------------------------------------------------
+// Motion stack types + client methods
+// ---------------------------------------------------------------------------
+
+export const motionScoreResponseSchema = z.object({
+  scorerVersion: z.string(),
+  tenantId: z.string(),
+  scores: z.record(z.number()),
+  primaryMotion: z.string().optional(),
+  secondaryMotions: z.array(z.string()).optional(),
+  confidence: z.number().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Signal ingestion
+// ---------------------------------------------------------------------------
+
+export const ingestSignalResponseSchema = z.object({
+  accepted: z.boolean(),
+  inserted: z.boolean(),
+  signalId: z.string(),
+  externalId: z.string().optional(),
+  tenantId: z.string(),
+});
+export type IngestSignalResponse = z.infer<typeof ingestSignalResponseSchema>;
+
+export const ingestSignal = (
+  tenantId: string,
+  signal: {
+    signalType:
+      | "competitive"
+      | "community"
+      | "icp"
+      | "product"
+      | "market"
+      | "internal";
+    source: string;
+    externalId?: string;
+    payload?: Record<string, unknown>;
+  },
+) =>
+  apiFetch("/v1/signals", tenantId, {
+    method: "POST",
+    body: JSON.stringify(signal),
+    schema: ingestSignalResponseSchema,
+  });

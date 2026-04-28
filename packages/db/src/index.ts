@@ -1,3 +1,4 @@
+export * from "./approval-feedback-repository.js";
 export * from "./contracts.js";
 export * from "./db.js";
 export * from "./outbox-repository.js";
@@ -30,6 +31,7 @@ export {
   type PlaybookVersion,
   type SignalEvent,
   type SignalTypeValue,
+  signalTypeValues,
   type WorkflowRunRow,
   type WorkflowRunStateValue,
 } from "./schema.js";
