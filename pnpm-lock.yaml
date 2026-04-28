@@ -71,6 +71,22 @@ importers:
         specifier: ^4.19.4
         version: 4.21.0
 
+  apps/worker-attribution:
+    dependencies:
+      '@growthos/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      nats:
+        specifier: ^2.29.3
+        version: 2.29.3
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      tsx:
+        specifier: ^4.19.4
+        version: 4.21.0
+
   apps/worker-critique:
     dependencies:
       '@growthos/db':
@@ -87,8 +103,81 @@ importers:
         specifier: ^4.19.4
         version: 4.21.0
 
+  apps/worker-learning:
+    dependencies:
+      '@growthos/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      nats:
+        specifier: ^2.29.3
+        version: 2.29.3
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      tsx:
+        specifier: ^4.19.4
+        version: 4.21.0
+
+  apps/worker-outbox-publisher:
+    dependencies:
+      '@growthos/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      nats:
+        specifier: ^2.29.3
+        version: 2.29.3
+      pg:
+        specifier: ^8.15.6
+        version: 8.20.0
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      '@types/pg':
+        specifier: ^8.15.6
+        version: 8.20.0
+      tsx:
+        specifier: ^4.19.4
+        version: 4.21.0
+
   apps/worker-signal-router:
     dependencies:
+      '@growthos/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      nats:
+        specifier: ^2.29.3
+        version: 2.29.3
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      tsx:
+        specifier: ^4.19.4
+        version: 4.21.0
+
+  apps/worker-warmth:
+    dependencies:
+      '@growthos/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      nats:
+        specifier: ^2.29.3
+        version: 2.29.3
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      tsx:
+        specifier: ^4.19.4
+        version: 4.21.0
+
+  apps/worker-workflow-callback:
+    dependencies:
+      '@growthos/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db

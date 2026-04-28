@@ -114,3 +114,6 @@ export const eventOutboxCommandSchema = z.object({
 });
 
 export type EventOutboxCommand = z.infer<typeof eventOutboxCommandSchema>;
+
+export * from "./restate-client.js";
+export * from "./workflows.js";

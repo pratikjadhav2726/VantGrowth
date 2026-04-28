@@ -1,4 +1,5 @@
 import { PaperclipClient, type PaperclipClientPort } from "@growthos/adapter";
+import type { RestateWorkflowClientPort } from "@growthos/core";
 import { InMemoryOutboxRepository } from "@growthos/db";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
@@ -91,6 +92,105 @@ describe("API app", () => {
 
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
     expect(events).toHaveLength(1);
+  });
+
+  it("accepts hello workflow triggers through outbox", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const restateWorkflowClient: RestateWorkflowClientPort = {
+      startHelloWorkflow: vi.fn(async () => undefined),
+      startTenantProvisioningWorkflow: vi.fn(async () => undefined),
+    };
+    const app = createApp({ outboxRepository, restateWorkflowClient });
+
+    const response = await app.request("http://localhost/v1/workflows/hello", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tenantId,
+        workflowId: "wf-hello-1",
+        dedupeKey: "wf-hello-1",
+        initiatedBy: "founder",
+        message: "bootstrap workflow",
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    const payload = (await response.json()) as { eventType: string };
+    expect(payload.eventType).toBe("workflow.hello.requested.v1");
+    expect(restateWorkflowClient.startHelloWorkflow).toHaveBeenCalledTimes(1);
+
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events).toHaveLength(1);
+  });
+
+  it("returns 503 for workflow trigger when outbox is unavailable", async () => {
+    const app = createApp();
+    const response = await app.request("http://localhost/v1/workflows/hello", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tenantId,
+        workflowId: "wf-hello-1",
+        dedupeKey: "wf-hello-1",
+        initiatedBy: "founder",
+        message: "bootstrap workflow",
+      }),
+    });
+
+    expect(response.status).toBe(503);
+  });
+
+  it("accepts tenant provisioning workflow triggers through outbox", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const restateWorkflowClient: RestateWorkflowClientPort = {
+      startHelloWorkflow: vi.fn(async () => undefined),
+      startTenantProvisioningWorkflow: vi.fn(async () => undefined),
+    };
+    const app = createApp({ outboxRepository, restateWorkflowClient });
+
+    const response = await app.request(
+      "http://localhost/v1/workflows/tenant-provisioning",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenantId,
+          workflowId: "wf-provision-1",
+          dedupeKey: "wf-provision-1",
+          tenantExternalId: "ten_lat_01",
+          tenantName: "Lattice",
+          requestedBy: "founder",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    const payload = (await response.json()) as { eventType: string };
+    expect(payload.eventType).toBe("workflow.tenant_provisioning.requested.v1");
+    expect(
+      restateWorkflowClient.startTenantProvisioningWorkflow,
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 503 for tenant provisioning trigger when outbox is unavailable", async () => {
+    const app = createApp();
+    const response = await app.request(
+      "http://localhost/v1/workflows/tenant-provisioning",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenantId,
+          workflowId: "wf-provision-1",
+          dedupeKey: "wf-provision-1",
+          tenantExternalId: "ten_lat_01",
+          tenantName: "Lattice",
+          requestedBy: "founder",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(503);
   });
 
   it("returns 503 when outbox repository is missing", async () => {

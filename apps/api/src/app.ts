@@ -1,6 +1,12 @@
 import type { PaperclipClientPort } from "@growthos/adapter";
 import { PaperclipClient, paperclipConfigFromEnv } from "@growthos/adapter";
-import { motionScoringInputSchema, scoreMotions } from "@growthos/core";
+import {
+  RestateHttpWorkflowClient,
+  type RestateWorkflowClientPort,
+  motionScoringInputSchema,
+  restateConfigFromEnv,
+  scoreMotions,
+} from "@growthos/core";
 import {
   type OutboxRepository,
   PostgresOutboxRepository,
@@ -10,10 +16,12 @@ import { Hono } from "hono";
 import { mapErrorToResponse } from "./error-middleware.js";
 import { createCommandRoutes } from "./routes/commands.js";
 import { createPaperclipRoutes } from "./routes/paperclip.js";
+import { createWorkflowRoutes } from "./routes/workflows.js";
 
 export interface AppDependencies {
   paperclipClient?: PaperclipClientPort;
   outboxRepository?: OutboxRepository;
+  restateWorkflowClient?: RestateWorkflowClientPort;
 }
 
 const resolvePaperclipClient = (
@@ -45,6 +53,15 @@ const resolveOutboxRepository = (
   });
 };
 
+const resolveRestateWorkflowClient = (
+  deps: AppDependencies,
+): RestateWorkflowClientPort | null => {
+  if (deps.restateWorkflowClient) return deps.restateWorkflowClient;
+  const config = restateConfigFromEnv();
+  if (!config) return null;
+  return new RestateHttpWorkflowClient(config);
+};
+
 export const createApp = (deps: AppDependencies = {}): Hono => {
   const app = new Hono();
   app.onError((error, c) => mapErrorToResponse(error, c));
@@ -69,6 +86,13 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
   app.route(
     "/v1/paperclip",
     createPaperclipRoutes({ paperclipClient: resolvePaperclipClient(deps) }),
+  );
+  app.route(
+    "/v1/workflows",
+    createWorkflowRoutes({
+      outboxRepository: resolveOutboxRepository(deps),
+      restateWorkflowClient: resolveRestateWorkflowClient(deps),
+    }),
   );
 
   return app;

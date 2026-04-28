@@ -109,6 +109,10 @@ export class PostgresOutboxRepository implements OutboxRepository {
 
       const row = result.rows[0];
       if (!row) throw new Error("Failed to enqueue or load outbox event.");
+      await client.query(
+        "SELECT pg_notify('growthos_outbox_events', $1)",
+        [JSON.stringify({ tenantId: parsed.tenantId, eventId: String(row.id) })],
+      );
       return mapOutboxRow(row);
     });
   }
