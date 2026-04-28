@@ -7,9 +7,12 @@ import {
   PostgresWorkflowRunRepository,
   createDbFromEnv,
 } from "@growthos/db";
+import { createLogger, initOtelSdk } from "@growthos/observability";
 import { JSONCodec, connect } from "nats";
 import { NatsJetStreamPublisher } from "./nats-publisher.js";
 import { WorkflowCallbackWorker } from "./workflow-callback-worker.js";
+
+const log = createLogger("growthos.worker-workflow-callback");
 
 export const createWorkflowCallbackWorkerFromEnv =
   async (): Promise<WorkflowCallbackWorker> => {
@@ -62,16 +65,24 @@ const startTenantProvisioningRequestedConsumer = async (
           codec.decode(message.data),
         );
       } catch (error) {
-        console.error("workflow callback processing failed", error);
+        log.error({ err: error }, "workflow callback processing failed");
       }
     }
   })();
 };
 
 if (process.env.WORKER_BOOTSTRAP === "true") {
+  initOtelSdk({ serviceName: "growthos.worker-workflow-callback" });
   const worker = await createWorkflowCallbackWorkerFromEnv();
   await startTenantProvisioningRequestedConsumer(worker);
-  console.log("@growthos/worker-workflow-callback initialized");
+  log.info(
+    {
+      subject:
+        process.env.WORKFLOW_CALLBACK_REQUEST_SUBJECT ??
+        "t.*.workflow.tenant_provisioning.requested.v1",
+    },
+    "@growthos/worker-workflow-callback initialized",
+  );
 }
 
 export * from "./nats-publisher.js";

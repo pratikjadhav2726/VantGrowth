@@ -17,7 +17,8 @@
     "drizzle-orm": "^0.45.2",
     "nats": "^2.29.3",
     "pg": "^8.15.6",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "@growthos/observability": "workspace:*"
   },
   "devDependencies": {
     "@types/pg": "^8.15.6",

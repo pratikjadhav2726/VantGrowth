@@ -61,6 +61,40 @@ pnpm atlas:lint
 
 If `ATLAS_LINT_DEV_URL` is unset, `db:atlas-lint` defaults to `docker://postgres/16/dev?search_path=public` (requires Docker).
 
+### Zero-downtime schema changes (pgroll expand–contract)
+
+For **breaking changes** (rename/drop column, change column type) that would break old running pods, use [pgroll](https://github.com/xataio/pgroll) instead of a plain Drizzle apply. See [`packages/db/pgroll/WORKFLOW.md`](packages/db/pgroll/WORKFLOW.md) for the full guide. Short version:
+
+```bash
+# 1. Expand — add new schema alongside old (both visible simultaneously)
+PGROLL_MIGRATION_FILE=packages/db/pgroll/migrations/<file>.yaml \
+  DATABASE_URL=postgresql://... \
+  pnpm migrate:expand
+
+# 2. Check state
+DATABASE_URL=postgresql://... pnpm migrate:status
+
+# 3. Deploy new code, drain old pods, then contract
+DATABASE_URL=postgresql://... pnpm migrate:contract
+
+# 4. Roll back if something is wrong before contracting
+DATABASE_URL=postgresql://... pnpm migrate:rollback
+```
+
+For **additive changes** (new nullable column, new table), plain `pnpm migrate:apply` is fine.
+
+See [`packages/db/pgroll/migrations/`](packages/db/pgroll/migrations/) for annotated examples.
+
+### RLS invariant tests
+
+The generated RLS test suite (`packages/db/src/rls-invariants.test.ts`) verifies all 5 tenant-scoped tables for owner-reads / cross-tenant-blocked / no-context-blocked invariants. It runs automatically in CI in the dedicated `rls-invariants` job. To run locally:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5488/growthos_ci pnpm --filter @growthos/db test
+```
+
+Tests are skipped when `DATABASE_URL` is unset (unit-test mode).
+
 ### Local infra (Docker Compose)
 
 [`compose.yaml`](compose.yaml) starts the full Phase-0 data and event plane on non-default host ports (no collision with local services):
@@ -72,7 +106,10 @@ If `ATLAS_LINT_DEV_URL` is unset, `db:atlas-lint` defaults to `docker://postgres
 | `valkey` | Valkey 8 (Redis-compatible cache) | **6388** |
 | `minio` + `minio-init` | MinIO S3-compatible store (buckets: `growthos`, `growthos-assets`) | **9088** (S3 API) / **9089** (console) |
 | `clickhouse` | ClickHouse 24 (analytics: `growthos` DB auto-created) | **8124** (HTTP) / **9010** (native) |
+| `qdrant` | Qdrant v1.12 (vector store — memory + embeddings) | **6343** (HTTP) / **6344** (gRPC) |
+| `gitea` | Gitea v1.22 (per-tenant workspace repos, SQLite dev mode) | **3088** (HTTP) / **2222** (SSH) |
 | `meilisearch` | Meilisearch v1.11 (full-text / vector search) | **7701** |
+| `openbao` | OpenBao 2.2 (Vault-compatible secrets + KMS envelope encryption) | **8200** |
 
 ```bash
 pnpm infra:up          # docker compose up -d
@@ -106,7 +143,25 @@ Env overrides for `seed:dev`:
 | `GROWTHOS_DEV_TENANT_ID` | `00000000-0000-0000-0001-000000000001` | Well-known dev tenant UUID |
 | `NATS_SERVERS` | _(unset — Postgres only)_ | Publish seed event to JetStream |
 
+OpenBao dev mode token: `growthos-dev-root-token`. Vault-compatible API: `http://localhost:8200`.
+
+```bash
+# Quick secret write/read verification (requires vault CLI or curl)
+curl -s -H "X-Vault-Token: growthos-dev-root-token" \
+  http://localhost:8200/v1/sys/health | jq .initialized
+```
+
 If a service exits non-zero, inspect logs: `docker compose -f compose.yaml logs <service>`.
+
+### Operational runbooks
+
+See [`docs/runbooks/`](docs/runbooks/) for incident response procedures:
+
+| Runbook | When to use |
+|---|---|
+| [`nats-leader-loss.md`](docs/runbooks/nats-leader-loss.md) | Outbox publisher stalls; JetStream meta-leader empty |
+| [`postgres-failover.md`](docs/runbooks/postgres-failover.md) | All writes failing; `pg_is_in_recovery()` = true on primary |
+| [`openbao-seal-unseal.md`](docs/runbooks/openbao-seal-unseal.md) | Secrets unavailable; `/v1/sys/health` returns `sealed: true` |
 
 ## Local multi-repo setup
 
@@ -129,20 +184,21 @@ pnpm dev
 
 ## Current modules
 
-- `apps/api`: Hono API with async command acceptance pattern.
+- `packages/observability`: `@growthos/observability` — OpenTelemetry + pino logging scaffolding. Exports `getTracer()`, `getMeter()`, `createStandardMetrics()`, `createLogger()`, `initOtelSdk()`, `createHttpMiddleware()`, plus re-exports `SpanKind`, `SpanStatusCode`, `context`, `trace` from `@opentelemetry/api` so consumers need no direct OTel dep. SDK init is no-op when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset. See **Observability** section below.
+- `apps/api`: Hono API with async command acceptance pattern. Mounts OTel middleware (`createHttpMiddleware`) on every route; SDK initialised at startup via `initOtelSdk("growthos.api")`; structured pino logger replaces all `console.*` calls.
 - `packages/core`: domain schemas + deterministic motion scoring.
-- `packages/db`: Drizzle ORM schema (`src/schema.ts`), drizzle-kit migrations (`drizzle/` + **`atlas.sum`** / **`atlas.hcl`** for Atlas validate + lint), `pnpm migrate:dry-run` (bootstrap + apply + table checks, same as CI), `pnpm atlas:validate` / `pnpm atlas:lint`, typed Postgres repositories, tenant helpers, outbox + workflow run repositories.
+- `packages/db`: Drizzle ORM schema (`src/schema.ts`), drizzle-kit migrations (`drizzle/` + **`atlas.sum`** / **`atlas.hcl`** for Atlas validate + lint), `pnpm migrate:dry-run` (bootstrap + apply + table checks, same as CI), `pnpm atlas:validate` / `pnpm atlas:lint`, typed Postgres repositories, tenant helpers, outbox + workflow run repositories. Includes **generated RLS invariant tests** (`src/rls-test-generator.ts` + `src/rls-invariants.test.ts`) — all 5 tenant-scoped tables verified for owner/other/no-context isolation; skipped unless `DATABASE_URL` is set.
 - `packages/adapter`: `growthos_native` adapter contract starter.
 - `packages/skills`: skill frontmatter/body parser + loader.
 - `packages/design-system`: initial token set.
 - `packages/test-utils`: shared fixtures.
-- `apps/worker-signal-router`: Signal Router worker with Postgres outbox + NATS JetStream publisher.
-- `apps/worker-critique`: Critique worker starter with idempotent outbox + tenant-scoped publish contract.
-- `apps/worker-outbox-publisher`: Poll-based outbox publisher worker that emits unconsumed tenant events to NATS JetStream and marks them consumed.
-- `apps/worker-learning`: Learning worker starter that synthesizes learning candidates from approval feedback and emits tenant-scoped events.
-- `apps/worker-attribution`: Attribution worker starter that computes touchpoint rollups and emits tenant-scoped attribution rollup events.
-- `apps/worker-warmth`: Warmth worker starter that evaluates warmth threshold gating and emits tenant-scoped warmth evaluation events.
-- `apps/worker-workflow-callback`: Workflow callback worker starter that emits tenant provisioning completion events from accepted workflow requests.
+- `apps/worker-signal-router`: Signal Router worker with Postgres outbox + NATS JetStream publisher. OTel SDK + pino logger wired.
+- `apps/worker-critique`: Critique worker starter with idempotent outbox + tenant-scoped publish contract. OTel SDK + pino logger wired.
+- `apps/worker-outbox-publisher`: Poll-based outbox publisher worker that emits unconsumed tenant events to NATS JetStream and marks them consumed. OTel SDK + pino logger wired; **`OutboxPublisher.publishCycle()`** and `publishPendingForTenant()` emit `outbox.publish_cycle` / `outbox.drain_tenant` spans with `outbox.events.published.total` + `outbox.cycle.duration_ms` metrics.
+- `apps/worker-learning`: Learning worker starter that synthesizes learning candidates from approval feedback and emits tenant-scoped events. OTel SDK + pino logger wired.
+- `apps/worker-attribution`: Attribution worker starter that computes touchpoint rollups and emits tenant-scoped attribution rollup events. OTel SDK + pino logger wired.
+- `apps/worker-warmth`: Warmth worker starter that evaluates warmth threshold gating and emits tenant-scoped warmth evaluation events. OTel SDK + pino logger wired.
+- `apps/worker-workflow-callback`: Workflow callback worker starter that emits tenant provisioning completion events from accepted workflow requests. OTel SDK + pino logger wired; subscription error path uses structured `log.error({ err })` with pino.
 - `apps/infra-smoke`: opt-in live Postgres + NATS JetStream smoke; drains outbox via **`@growthos/worker-outbox-publisher`** (same publish path as the worker), then verifies JetStream `last_by_subj` read-back; optional Restate tenant-provisioning **runtime state** contract verification.
 - `@growthos/core` now includes a Restate workflow starter contract module for `workflow.hello.requested.v1`.
   and tenant provisioning `workflow.tenant_provisioning.requested.v1`.
@@ -221,6 +277,53 @@ pnpm smoke:infra
   (supports optional signature verification via `RESTATE_CALLBACK_SECRET`).
 
 **Restate integration note:** the typed HTTP client in `@growthos/core` includes `getTenantProvisioningRuntimeState` for the state endpoint above; align your Restate ingress or sidecar with that path and response shape for workers and smoke checks.
+
+## Observability
+
+`@growthos/observability` provides the OTel + logging scaffolding used by all GrowthOS services.
+
+### Tracing + metrics (OTLP/HTTP)
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable trace and metric export (e.g. to SigNoz):
+
+```bash
+OTEL_SERVICE_NAME=growthos.api \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+pnpm dev
+```
+
+When the env var is absent, the SDK runs in no-op mode — the app behaves normally and no spans are emitted.
+
+### Structured logging (pino)
+
+`createLogger("growthos.api")` returns a [pino](https://getpino.io) logger. Log lines carry `service`, `level`, and `time` plus any context you pass:
+
+```typescript
+import { createLogger } from "@growthos/observability";
+const log = createLogger("growthos.worker-outbox");
+log.info({ tenantId, runId }, "outbox row consumed");
+```
+
+Set `LOG_LEVEL=debug` to enable debug output. Pretty-printing is enabled in non-production (`NODE_ENV !== "production"`).
+
+### Standard metrics (three per service)
+
+Call `createStandardMetrics(meter, prefix)` to get the canonical rate/duration/error counters:
+
+```typescript
+import { getMeter, createStandardMetrics } from "@growthos/observability";
+const metrics = createStandardMetrics(getMeter("growthos.worker"), "growthos.worker");
+metrics.requestsTotal.add(1, { "http.route": "/drain" });
+metrics.requestsDurationMs.record(42, { "http.route": "/drain" });
+```
+
+`apps/api` mounts `createHttpMiddleware()` on every Hono route, recording these automatically.
+
+### Optional: disable SDK entirely
+
+```bash
+OTEL_SDK_DISABLED=true pnpm dev
+```
 
 ## Architecture references
 

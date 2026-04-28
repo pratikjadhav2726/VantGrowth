@@ -1,6 +1,9 @@
 import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
+import { createLogger, initOtelSdk } from "@growthos/observability";
 import { LearningWorker } from "./learning-worker.js";
 import { NatsJetStreamPublisher } from "./nats-publisher.js";
+
+const log = createLogger("growthos.worker-learning");
 
 export const createLearningWorkerFromEnv =
   async (): Promise<LearningWorker> => {
@@ -16,8 +19,9 @@ export const createLearningWorkerFromEnv =
   };
 
 if (process.env.WORKER_BOOTSTRAP === "true") {
+  initOtelSdk({ serviceName: "growthos.worker-learning" });
   await createLearningWorkerFromEnv();
-  console.log("@growthos/worker-learning initialized");
+  log.info("@growthos/worker-learning initialized");
 }
 
 export * from "./contracts.js";

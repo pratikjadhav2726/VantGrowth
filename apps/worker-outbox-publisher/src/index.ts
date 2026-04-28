@@ -1,4 +1,5 @@
 import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
+import { createLogger, initOtelSdk } from "@growthos/observability";
 import {
   PostgresCycleLeaseGuard,
   cycleLeaseConfigFromEnv,
@@ -7,6 +8,8 @@ import { NatsJetStreamPublisher } from "./nats-publisher.js";
 import { PostgresOutboxNotifier } from "./outbox-notifier.js";
 import { OutboxPublisher, runtimeConfigFromEnv } from "./outbox-publisher.js";
 import { OutboxPublisherRunner } from "./runner.js";
+
+const log = createLogger("growthos.worker-outbox-publisher");
 
 export const createOutboxPublisherFromEnv = async (): Promise<{
   publisher: OutboxPublisher;
@@ -40,7 +43,7 @@ export const startOutboxPublisherLoop = (
 ): OutboxPublisherRunner => {
   const runnerOptions = {
     onCycleError: (error: unknown) => {
-      console.error("outbox publish cycle failed", error);
+      log.error({ err: error }, "outbox publish cycle failed");
     },
     ...(options.leaseGuard ? { leaseGuard: options.leaseGuard } : {}),
   };
@@ -60,6 +63,7 @@ export const startOutboxPublisherLoop = (
 };
 
 if (process.env.WORKER_BOOTSTRAP === "true") {
+  initOtelSdk({ serviceName: "growthos.worker-outbox-publisher" });
   const { publisher, runtimeConfig } = await createOutboxPublisherFromEnv();
   const leaseGuard = new PostgresCycleLeaseGuard(
     createDbFromEnv(),
@@ -73,7 +77,15 @@ if (process.env.WORKER_BOOTSTRAP === "true") {
     leaseGuard,
     notifier,
   });
-  console.log("@growthos/worker-outbox-publisher initialized");
+  log.info(
+    {
+      tenantIds: runtimeConfig.tenantIds,
+      pollIntervalMs: runtimeConfig.pollIntervalMs,
+      batchSizePerTenant: runtimeConfig.batchSizePerTenant,
+      listenNotify: process.env.OUTBOX_ENABLE_LISTEN_NOTIFY !== "false",
+    },
+    "@growthos/worker-outbox-publisher initialized",
+  );
 }
 
 export * from "./cycle-lease.js";

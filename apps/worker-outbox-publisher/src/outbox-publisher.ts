@@ -1,6 +1,23 @@
 import type { OutboxRepository } from "@growthos/db";
 import { tenantScopedSubject } from "@growthos/db";
+import {
+  SpanKind,
+  SpanStatusCode,
+  getMeter,
+  getTracer,
+} from "@growthos/observability";
 import { z } from "zod";
+
+const tracer = getTracer("growthos.worker-outbox-publisher");
+const meter = getMeter("growthos.worker-outbox-publisher");
+const eventsPublished = meter.createCounter("outbox.events.published.total", {
+  description: "Total outbox events successfully published to NATS",
+  unit: "{event}",
+});
+const cycleDurationMs = meter.createHistogram("outbox.cycle.duration_ms", {
+  description: "Duration of a full outbox drain cycle across all tenants",
+  unit: "ms",
+});
 
 export interface EventPublisher {
   publish(subject: string, payload: Record<string, unknown>): Promise<void>;
@@ -46,40 +63,91 @@ export class OutboxPublisher {
     tenantId: string,
     limit: number,
   ): Promise<number> {
-    const pending = await this.deps.outboxRepository.listUnconsumed(
-      tenantId,
-      limit,
+    return tracer.startActiveSpan(
+      "outbox.drain_tenant",
+      {
+        kind: SpanKind.INTERNAL,
+        attributes: { "tenant.id": tenantId, "outbox.limit": limit },
+      },
+      async (span) => {
+        try {
+          const pending = await this.deps.outboxRepository.listUnconsumed(
+            tenantId,
+            limit,
+          );
+          let publishedCount = 0;
+
+          for (const event of pending) {
+            await this.deps.eventPublisher.publish(
+              tenantScopedSubject(event.tenantId, event.eventType),
+              event.payload,
+            );
+            await this.deps.outboxRepository.markConsumed(
+              event.tenantId,
+              event.id,
+            );
+            publishedCount += 1;
+          }
+
+          span.setAttribute("outbox.published_count", publishedCount);
+          eventsPublished.add(publishedCount, { "tenant.id": tenantId });
+          return publishedCount;
+        } catch (err: unknown) {
+          span.recordException(
+            err instanceof Error ? err : new Error(String(err)),
+          );
+          span.setStatus({ code: SpanStatusCode.ERROR });
+          throw err;
+        } finally {
+          span.end();
+        }
+      },
     );
-    let publishedCount = 0;
-
-    for (const event of pending) {
-      await this.deps.eventPublisher.publish(
-        tenantScopedSubject(event.tenantId, event.eventType),
-        event.payload,
-      );
-      await this.deps.outboxRepository.markConsumed(event.tenantId, event.id);
-      publishedCount += 1;
-    }
-
-    return publishedCount;
   }
 
   async publishCycle(
     tenantIds: string[],
     limitPerTenant: number,
   ): Promise<PublishCycleResult> {
-    const publishedByTenant: Record<string, number> = {};
-    let publishedCount = 0;
+    const startMs = Date.now();
+    return tracer.startActiveSpan(
+      "outbox.publish_cycle",
+      {
+        kind: SpanKind.INTERNAL,
+        attributes: {
+          "tenant.count": tenantIds.length,
+          "outbox.limit_per_tenant": limitPerTenant,
+        },
+      },
+      async (span) => {
+        const publishedByTenant: Record<string, number> = {};
+        let publishedCount = 0;
 
-    for (const tenantId of tenantIds) {
-      const tenantPublishedCount = await this.publishPendingForTenant(
-        tenantId,
-        limitPerTenant,
-      );
-      publishedByTenant[tenantId] = tenantPublishedCount;
-      publishedCount += tenantPublishedCount;
-    }
+        try {
+          for (const tenantId of tenantIds) {
+            const tenantPublishedCount = await this.publishPendingForTenant(
+              tenantId,
+              limitPerTenant,
+            );
+            publishedByTenant[tenantId] = tenantPublishedCount;
+            publishedCount += tenantPublishedCount;
+          }
 
-    return { publishedCount, publishedByTenant };
+          span.setAttribute("outbox.total_published", publishedCount);
+          return { publishedCount, publishedByTenant };
+        } catch (err: unknown) {
+          span.recordException(
+            err instanceof Error ? err : new Error(String(err)),
+          );
+          span.setStatus({ code: SpanStatusCode.ERROR });
+          throw err;
+        } finally {
+          span.end();
+          cycleDurationMs.record(Date.now() - startMs, {
+            "tenant.count": tenantIds.length,
+          });
+        }
+      },
+    );
   }
 }

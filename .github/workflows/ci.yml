@@ -105,3 +105,48 @@ jobs:
           atlas migrate validate --env growthos
           atlas migrate lint --env growthos --latest 1 \
             --dev-url "postgresql://postgres:postgres@localhost:5432/atlas_lint?sslmode=disable"
+
+  rls-invariants:
+    name: RLS invariant tests (Principle 1.6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: growthos_rls_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d growthos_rls_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm (packageManager)
+        run: corepack enable && corepack prepare pnpm@10.17.0 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply bootstrap + Drizzle migration (including RLS policies)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/growthos_rls_test
+        run: pnpm --filter @growthos/db migrate:dry-run
+
+      - name: Run generated RLS invariant tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/growthos_rls_test
+        # rls-invariants.test.ts uses describe.skipIf(!DATABASE_URL) — when DATABASE_URL
+        # is set the 15 generated cases (3 invariants x 5 tenant-scoped tables) run live.
+        # A single failure blocks the merge per Principle 1.6.
+        run: pnpm --filter @growthos/db test --reporter=verbose

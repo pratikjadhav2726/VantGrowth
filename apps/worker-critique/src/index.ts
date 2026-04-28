@@ -1,6 +1,9 @@
 import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
+import { createLogger, initOtelSdk } from "@growthos/observability";
 import { CritiqueWorker } from "./critique-worker.js";
 import { NatsJetStreamPublisher } from "./nats-publisher.js";
+
+const log = createLogger("growthos.worker-critique");
 
 export const createCritiqueWorkerFromEnv =
   async (): Promise<CritiqueWorker> => {
@@ -16,8 +19,9 @@ export const createCritiqueWorkerFromEnv =
   };
 
 if (process.env.WORKER_BOOTSTRAP === "true") {
+  initOtelSdk({ serviceName: "growthos.worker-critique" });
   await createCritiqueWorkerFromEnv();
-  console.log("@growthos/worker-critique initialized");
+  log.info("@growthos/worker-critique initialized");
 }
 
 export * from "./contracts.js";

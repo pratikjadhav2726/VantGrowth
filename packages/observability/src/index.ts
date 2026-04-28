@@ -13,6 +13,9 @@
  * spans, standard metrics, and structured logs with zero boilerplate.
  */
 
+// Re-export OTel primitives so consumers don't need a direct @opentelemetry/api dep.
+export { SpanKind, SpanStatusCode, context, trace } from "@opentelemetry/api";
+
 export { getTracer, type Tracer } from "./tracer.js";
 
 export {

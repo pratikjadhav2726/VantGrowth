@@ -18,7 +18,11 @@
     "db:atlas-validate": "atlas migrate validate --env growthos",
     "db:atlas-lint": "atlas migrate lint --env growthos --latest 1 --dev-url \"${ATLAS_LINT_DEV_URL:-docker://postgres/16/dev?search_path=public}\"",
     "db:migrate-apply": "atlas migrate apply --env growthos",
-    "db:seed-dev": "tsx src/seed-dev-cli.ts"
+    "db:seed-dev": "tsx src/seed-dev-cli.ts",
+    "db:pgroll-start": "pgroll start --postgres-url \"$DATABASE_URL\" --schema growthos \"$PGROLL_MIGRATION_FILE\"",
+    "db:pgroll-complete": "pgroll complete --postgres-url \"$DATABASE_URL\" --schema growthos",
+    "db:pgroll-rollback": "pgroll rollback --postgres-url \"$DATABASE_URL\" --schema growthos",
+    "db:pgroll-status": "pgroll status --postgres-url \"$DATABASE_URL\" --schema growthos"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

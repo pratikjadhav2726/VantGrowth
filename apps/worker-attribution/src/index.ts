@@ -1,6 +1,9 @@
 import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
+import { createLogger, initOtelSdk } from "@growthos/observability";
 import { AttributionWorker } from "./attribution-worker.js";
 import { NatsJetStreamPublisher } from "./nats-publisher.js";
+
+const log = createLogger("growthos.worker-attribution");
 
 export const createAttributionWorkerFromEnv =
   async (): Promise<AttributionWorker> => {
@@ -16,8 +19,9 @@ export const createAttributionWorkerFromEnv =
   };
 
 if (process.env.WORKER_BOOTSTRAP === "true") {
+  initOtelSdk({ serviceName: "growthos.worker-attribution" });
   await createAttributionWorkerFromEnv();
-  console.log("@growthos/worker-attribution initialized");
+  log.info("@growthos/worker-attribution initialized");
 }
 
 export * from "./attribution-worker.js";
