@@ -4,11 +4,7 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "files": [
-    "dist",
-    "src",
-    "drizzle"
-  ],
+  "files": ["dist", "src", "drizzle", "ci"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "biome check src",
@@ -16,7 +12,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "migrate:dry-run": "tsx src/migrate-dry-run-cli.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
@@ -26,6 +23,7 @@
   },
   "devDependencies": {
     "@types/pg": "^8.20.0",
-    "drizzle-kit": "^0.31.10"
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.19.4"
   }
 }

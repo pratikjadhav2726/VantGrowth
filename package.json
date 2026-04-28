@@ -9,6 +9,7 @@
     "dev": "turbo run dev --parallel",
     "lint": "turbo run lint",
     "smoke:infra": "pnpm --filter @growthos/infra-smoke smoke",
+    "migrate:dry-run": "pnpm --filter @growthos/db migrate:dry-run",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "format": "biome format --write .",

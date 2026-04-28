@@ -4,12 +4,9 @@ import { NatsJetStreamPublisher } from "./nats-publisher.js";
 
 export const createLearningWorkerFromEnv =
   async (): Promise<LearningWorker> => {
-    const outboxRepository = new PostgresOutboxRepository(
-      createDbFromEnv(),
-      {
-        actorKind: "system",
-      },
-    );
+    const outboxRepository = new PostgresOutboxRepository(createDbFromEnv(), {
+      actorKind: "system",
+    });
     const eventPublisher = await NatsJetStreamPublisher.connect();
 
     return new LearningWorker({

@@ -1,19 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { RestateHttpWorkflowClient } from "@growthos/core";
 import { PostgresOutboxRepository, createDb } from "@growthos/db";
 import { JSONCodec, connect } from "nats";
-import { z } from "zod";
-
-const smokeEnvSchema = z.object({
-  DATABASE_URL: z.string().url(),
-  NATS_SERVERS: z.string().min(1).default("nats://localhost:4222"),
-  GROWTHOS_SMOKE_TENANT_ID: z
-    .string()
-    .uuid()
-    .default("00000000-0000-4000-8000-000000000001"),
-});
+import { parseSmokeEnv } from "./smoke-env.js";
 
 const main = async () => {
-  const env = smokeEnvSchema.parse(process.env);
+  const env = parseSmokeEnv(process.env);
   const db = createDb({ connectionString: env.DATABASE_URL, poolMax: 1 });
 
   const nats = await connect({
@@ -48,27 +40,43 @@ const main = async () => {
       }),
     );
 
-    console.log(
-      JSON.stringify(
-        {
-          ok: true,
-          postgres: {
-            outboxEventId: outboxEvent.id,
-            tenantId: outboxEvent.tenantId,
-          },
-          nats: {
-            stream: ack.stream,
-            sequence: ack.seq,
-            subject,
-          },
-        },
-        null,
-        2,
-      ),
-    );
+    const report: Record<string, unknown> = {
+      ok: true,
+      postgres: {
+        outboxEventId: outboxEvent.id,
+        tenantId: outboxEvent.tenantId,
+      },
+      nats: {
+        stream: ack.stream,
+        sequence: ack.seq,
+        subject,
+      },
+    };
+
+    if (env.RESTATE_BASE_URL && env.GROWTHOS_SMOKE_WORKFLOW_ID) {
+      const restate = new RestateHttpWorkflowClient({
+        baseUrl: env.RESTATE_BASE_URL,
+        ...(env.RESTATE_API_KEY ? { apiKey: env.RESTATE_API_KEY } : {}),
+        timeoutMs: env.RESTATE_TIMEOUT_MS ?? 5_000,
+      });
+      const runtimeState = await restate.getTenantProvisioningRuntimeState({
+        tenantId: env.GROWTHOS_SMOKE_TENANT_ID,
+        workflowId: env.GROWTHOS_SMOKE_WORKFLOW_ID,
+      });
+      report.restate = {
+        workflowId: runtimeState.workflowId,
+        tenantId: runtimeState.tenantId,
+        state: runtimeState.state,
+        runtimeRunId: runtimeState.runtimeRunId ?? null,
+        historyLength: runtimeState.history.length,
+        failureCode: runtimeState.failureCode ?? null,
+        failureMessage: runtimeState.failureMessage ?? null,
+      };
+    }
+
+    console.log(JSON.stringify(report, null, 2));
   } finally {
     await nats.drain();
-    // db pool is drained when the process exits; no explicit end needed for smoke run
   }
 };
 

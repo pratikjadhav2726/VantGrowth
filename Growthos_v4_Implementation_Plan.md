@@ -113,15 +113,15 @@ Each phase has a sharp exit criterion. Do not begin the next phase until the cur
 
 This section tracks what is already implemented in the `GTM` repo so execution status is explicit and not inferred from architecture docs.
 
-**Last updated:** 2026-04-27
+**Last updated:** 2026-04-28
 
 ### Progress dashboard (implementation status)
 
 | Phase / Track | Status | Progress |
 |---|---|---:|
-| Phase 0 / Track A (Repo + tooling) | In progress, strong foundation complete | 70% |
-| Phase 0 / Track B (Data plane) | In progress (Drizzle ORM schema + drizzle-kit migrations + full repository layer migrated from raw SQL) | 35% |
-| Phase 0 / Track C (Event + workflow plane) | In progress (Postgres outbox + NATS publisher + all worker starters + loop hardening + notify/lease coordination + Restate triggers + typed runtime client + signed callback ingestion + progress replay contract + workflow state machine + callbackType routing + failed terminal event + progress-only endpoint + **persistent workflow_runs state store + real CAS-based transition enforcement + NATS-driven workflow-callback consumer + runtime-history-verified terminal state emission**) | 99% |
+| Phase 0 / Track A (Repo + tooling) | In progress (GitHub Actions: Biome + typecheck + tests + Postgres `migrate:dry-run` on PR/push, same script as local) | 88% |
+| Phase 0 / Track B (Data plane) | In progress (Drizzle ORM schema + drizzle-kit migrations + full repository layer migrated from raw SQL; CI validates migration apply on ephemeral Postgres) | 40% |
+| Phase 0 / Track C (Event + workflow plane) | In progress (Postgres outbox + NATS publisher + all worker starters + loop hardening + notify/lease coordination + Restate triggers + typed runtime client + signed callback ingestion + progress replay contract + workflow state machine + callbackType routing + failed terminal event + progress-only endpoint + **persistent workflow_runs state store + real CAS-based transition enforcement + NATS-driven workflow-callback consumer + runtime-history-verified terminal state emission + infra-smoke Restate state contract hook**) | 100% |
 | Phase 0 / Track D (LLM + harness infra) | Not started | 0% |
 | Phase 0 / Track E (Identity/billing/secrets/deploy) | Not started | 0% |
 | Phase 0 / Track F (Paperclip fork hardening) | In progress (`growthos_native`, scheduler leases, Postgres LiveEvents fanout, additive RLS baseline, expanded strict RLS route batch + route tests complete; `issues` labels + expanded reads + low-risk/high-churn mutations with scoped helper cleanup effectively complete) | 99% |
@@ -134,7 +134,8 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 - **Phase 0 / Track A (Repo + tooling)**
   - Monorepo scaffolded with `pnpm`, `turbo`, `typescript`, `biome`, `vitest`.
   - Packages created: `@growthos/core`, `@growthos/api`, `@growthos/adapter`, `@growthos/skills`, `@growthos/design-system`, `@growthos/test-utils`.
-  - Workspace validation commands are green (`pnpm typecheck`, `pnpm test`).
+  - Workspace validation commands are green (`pnpm check`, `pnpm typecheck`, `pnpm test`).
+  - **GitHub Actions CI** (`.github/workflows/ci.yml`): on push/PR to `main` or `master`, runs `pnpm check`, `pnpm typecheck`, `pnpm test`, plus a **Postgres migration dry-run** job (Postgres 16 service) that runs `pnpm --filter @growthos/db migrate:dry-run` — the same entrypoint as local (`pnpm migrate:dry-run` from repo root).
 - **Phase 1 / S2 Domain starter**
   - Deterministic `Motion Engine` starter implemented in `@growthos/core` with versioned scorer output and tests.
 - **Phase 0 / Track B Data-plane starter**
@@ -152,6 +153,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
   - `@growthos/infra-smoke` updated to use `createDb` directly.
   - `src/index.ts` re-exports schema types, Drizzle table objects, and all repository interfaces cleanly with no duplicate-export conflicts.
   - Migration contract tests now verify the generated migration file (not hand-written SQL); schema tests verify Drizzle column metadata.
+  - **`migrate:dry-run`**: `packages/db/src/migrate-dry-run-cli.ts` (via `pnpm migrate:dry-run` at repo root or `pnpm --filter @growthos/db migrate:dry-run`) loads `packages/db/ci/bootstrap.sql`, splits `drizzle/0000_yielding_inertia.sql` with `splitDrizzleMigrationSql` (Drizzle `--> statement-breakpoint` markers, including same-line `;-->` cases), executes each chunk with `pg`, then asserts `growthos` core tables exist. **CI uses this script only** (no parallel `psql` path). Unit tests in `split-drizzle-migration-sql.test.ts`.
   - Old hand-written `migrations/` folder removed.
 - **Phase 0 / Track C Event-plane starter**
   - `@growthos/worker-signal-router` app added.
@@ -182,7 +184,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
   - **Callback route dispatches by `callbackType`**: `progress` → emits 1 progress event; `completed` → emits progress + completed; `failed` → emits progress + failed. Transition legality validated via `validateWorkflowTransition` before event emission, returning `409` on illegal transitions.
   - **Dedicated progress-only endpoint** added: `POST /v1/workflows/runtime-callbacks/tenant-provisioning/progress` — emits exactly 1 `workflow.tenant_provisioning.progress.v1` event per call with full signature-verification support.
   - API response now returns `callbackType` and `targetState` fields for caller-side state machine alignment.
-  - **Persistent workflow run state store implemented** (`packages/db/migrations/0002_workflow_runs.sql` + `packages/db/src/workflow-run-repository.ts`):
+  - **Persistent workflow run state store implemented** (`packages/db/src/schema.ts` + `packages/db/drizzle/*.sql` + `packages/db/src/workflow-run-repository.ts`):
     - `workflow_runs` table with `state` column enforced by `CHECK` constraint and terminal-state `NOT IN` guard on `UPDATE`.
     - RLS policy and unique index on `(tenant_id, workflow_id)` for tenant isolation.
     - `WorkflowRunRepository` interface with `upsertRequested` (idempotent), `transitionState` (atomic CAS with terminal blocking), and `getByWorkflowId`.
@@ -190,7 +192,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
     - Terminal state invariant enforced at both the in-memory layer (guard check before mutation) and the Postgres layer (`AND state NOT IN ('completed', 'failed')` in `UPDATE`).
   - **Callback route upgraded**: reads stored `WorkflowRun` state before transition, performs `validateWorkflowTransition`, executes `transitionState` CAS, returns `409 Conflict` on illegal transition or concurrent update. Gracefully degrades to permissive validation when no state store is configured.
   - **`POST /v1/workflows/tenant-provisioning`** now calls `upsertRequested` to durably record the workflow run as `requested` before emitting the outbox event.
-  - `@growthos/infra-smoke` app added for opt-in live Postgres outbox + NATS JetStream smoke verification.
+  - `@growthos/infra-smoke` app added for opt-in live Postgres outbox + NATS JetStream smoke verification; extended with optional Restate `getTenantProvisioningRuntimeState` verification when `RESTATE_BASE_URL` + `GROWTHOS_SMOKE_WORKFLOW_ID` are set together; includes `parseSmokeEnv` Zod validation + unit tests.
 - **Phase 0 / Track F Paperclip fork starter**
   - Local Paperclip fork now recognizes `growthos_native` as a built-in adapter type.
   - Server adapter registry, shared adapter constants, and UI adapter/display registry updated.
@@ -222,17 +224,17 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 
 ### In progress / not yet implemented
 
-- **Phase 0 / Track B** data plane provisioning and migrations (`Drizzle`, `Atlas`, Postgres schemas) not yet implemented.
-- **Phase 0 / Track C** durable event/workflow plane (`NATS JetStream`, `Restate`, outbox publisher) is still incomplete; all worker starters implemented, Restate triggers, typed dispatch seam, signed callback ingestion, progress replay, workflow state machine, persistent `workflow_runs` state store, NATS-driven callback worker state transitions, and runtime-history-backed terminal event verification are all wired. Outstanding: live infrastructure smoke (Postgres + NATS) and production-grade Restate endpoint contract alignment/e2e verification.
+- **Phase 0 / Track B** production data-plane provisioning (Atlas + pgroll expand/contract, ClickHouse/Qdrant/Valkey topology, `seed dev`) not yet implemented; **Drizzle schema + drizzle-kit migrations + repositories** are in-repo; **CI and developers share `migrate:dry-run`** against ephemeral or local Postgres (bootstrap SQL + generated migration + table checks).
+- **Phase 0 / Track C** durable event/workflow plane (`NATS JetStream`, `Restate`, outbox publisher) is still incomplete at *production topology* level (multi-node clusters, stream topology from stack decisions, SigNoz tracing); code-path wiring is complete including `infra-smoke` optional Restate state verification. Outstanding: run smoke + callback worker against live stacks and harden Restate ingress to the documented `GET /workflows/tenant-provisioning/:workflowId/state` contract in your deployment.
 - **Phase 0 / Track D/E** LLM gateway deployment, secrets, identity, billing, and GitOps deploy tracks not yet implemented.
 - **Phase 0 / Track F** Paperclip fork strict RLS enforcement is not yet complete across all company-scoped routes; dashboard, goals, activity, inbox-dismissals, sidebar project preferences, sidebar-badges, user-profile, company-skills, costs/budget, environments, approvals, assets, projects list/get/create/update + workspace CRUD + runtime control, secrets, routines, and the current `issues` labels + expanded read/mutation (including approvals, work-products, documents, checkout/release, interaction decisions, delete/create-interaction, queued comment cancel, issue comment add/reopen flow DB paths, and scoped expired-interaction helper usage) batch are converted reference paths.
 - **Phase 1 agents/workers/UI** (Intel/Inbound/Reporting, approval queue UI, weekly review) not yet implemented.
 
 ### Active next milestones (execution order)
 
-1. **Track B groundwork** — wire Drizzle ORM + Atlas migration runner; apply `0001_growthos_core.sql` and `0002_workflow_runs.sql` as Atlas-managed migrations; add a schema smoke test.
-2. **Live infrastructure smoke** — run `@growthos/infra-smoke` against local Postgres + NATS once services and streams are configured; assert outbox drain → NATS JetStream publish end-to-end.
-3. **Live infrastructure smoke + Restate contract verification** — run `@growthos/infra-smoke` and callback-worker loop against local Postgres + NATS + Restate to validate endpoint contract (`/workflows/tenant-provisioning/:workflowId/state`) and replay payload compatibility end-to-end.
+1. **Track B groundwork** — wire **Atlas** migration runner around Drizzle-generated SQL (`packages/db/drizzle/`). **Done:** shared **`pnpm migrate:dry-run`** (`@growthos/db` + CI) applies bootstrap + migration via `pg` with Drizzle-aware splitting and post-apply table checks.
+2. **Operational smoke runs** — execute `pnpm smoke:infra` against local Postgres + NATS + JetStream stream; with Restate up, add `RESTATE_BASE_URL` + `GROWTHOS_SMOKE_WORKFLOW_ID` to validate runtime state JSON contract.
+3. **Outbox drain e2e** — run `worker-outbox-publisher` + confirm JetStream consumer receives published subjects for smoke + workflow events.
 4. Continue Paperclip fork final verification pass for any residual unscoped `issues` branches.
 
 ---
