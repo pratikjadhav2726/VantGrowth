@@ -22,6 +22,7 @@ export interface AppDependencies {
   paperclipClient?: PaperclipClientPort;
   outboxRepository?: OutboxRepository;
   restateWorkflowClient?: RestateWorkflowClientPort;
+  runtimeCallbackSecret?: string;
 }
 
 const resolvePaperclipClient = (
@@ -62,6 +63,9 @@ const resolveRestateWorkflowClient = (
   return new RestateHttpWorkflowClient(config);
 };
 
+const resolveRuntimeCallbackSecret = (deps: AppDependencies): string | null =>
+  deps.runtimeCallbackSecret ?? process.env.RESTATE_CALLBACK_SECRET ?? null;
+
 export const createApp = (deps: AppDependencies = {}): Hono => {
   const app = new Hono();
   app.onError((error, c) => mapErrorToResponse(error, c));
@@ -92,6 +96,7 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
     createWorkflowRoutes({
       outboxRepository: resolveOutboxRepository(deps),
       restateWorkflowClient: resolveRestateWorkflowClient(deps),
+      runtimeCallbackSecret: resolveRuntimeCallbackSecret(deps),
     }),
   );
 

@@ -15,3 +15,10 @@ export class ServiceUnavailableError extends HttpError {
     this.name = "ServiceUnavailableError";
   }
 }
+
+export class UnauthorizedError extends HttpError {
+  constructor(message: string, details?: unknown) {
+    super(message, 401, details);
+    this.name = "UnauthorizedError";
+  }
+}

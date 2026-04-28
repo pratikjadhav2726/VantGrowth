@@ -111,3 +111,65 @@ export const acceptTenantProvisioningWorkflowDeterministic = (
     acceptedAt: new Date(),
   });
 };
+
+export const tenantProvisioningRuntimeCallbackSchema =
+  tenantProvisioningWorkflowInputSchema.extend({
+    callbackId: z.string().min(1),
+    runtimeRunId: z.string().min(1).optional(),
+    progressStep: z.string().min(1).optional(),
+    progressMessage: z.string().min(1).optional(),
+    progressPercent: z.number().min(0).max(100).optional(),
+  });
+
+export type TenantProvisioningRuntimeCallback = z.infer<
+  typeof tenantProvisioningRuntimeCallbackSchema
+>;
+
+export const createTenantProvisioningCompletedOutboxCommand = (
+  input: TenantProvisioningRuntimeCallback,
+) => {
+  const parsed = tenantProvisioningRuntimeCallbackSchema.parse(input);
+  const accepted = acceptTenantProvisioningWorkflowDeterministic(parsed);
+
+  return {
+    tenantId: parsed.tenantId,
+    eventType: "workflow.tenant_provisioning.completed.v1",
+    idempotencyKey: `${parsed.dedupeKey}:completed:${parsed.callbackId}`,
+    payload: {
+      workflow_id: accepted.workflowId,
+      tenant_id: accepted.tenantId,
+      tenant_external_id: parsed.tenantExternalId,
+      tenant_name: parsed.tenantName,
+      provisioning_key: accepted.provisioningKey,
+      status: accepted.status,
+      callback_id: parsed.callbackId,
+      runtime_run_id: parsed.runtimeRunId ?? null,
+      accepted_at: accepted.acceptedAt.toISOString(),
+      completed_at: new Date().toISOString(),
+    },
+  };
+};
+
+export const createTenantProvisioningProgressOutboxCommand = (
+  input: TenantProvisioningRuntimeCallback,
+) => {
+  const parsed = tenantProvisioningRuntimeCallbackSchema.parse(input);
+
+  return {
+    tenantId: parsed.tenantId,
+    eventType: "workflow.tenant_provisioning.progress.v1",
+    idempotencyKey: `${parsed.dedupeKey}:progress:${parsed.callbackId}:${parsed.progressStep ?? "callback_received"}`,
+    payload: {
+      workflow_id: parsed.workflowId,
+      tenant_id: parsed.tenantId,
+      tenant_external_id: parsed.tenantExternalId,
+      tenant_name: parsed.tenantName,
+      callback_id: parsed.callbackId,
+      runtime_run_id: parsed.runtimeRunId ?? null,
+      progress_step: parsed.progressStep ?? "callback_received",
+      progress_message: parsed.progressMessage ?? "Runtime callback received",
+      progress_percent: parsed.progressPercent ?? null,
+      occurred_at: new Date().toISOString(),
+    },
+  };
+};

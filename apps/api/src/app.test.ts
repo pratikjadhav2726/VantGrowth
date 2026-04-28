@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { PaperclipClient, type PaperclipClientPort } from "@growthos/adapter";
 import type { RestateWorkflowClientPort } from "@growthos/core";
 import { InMemoryOutboxRepository } from "@growthos/db";
@@ -186,6 +187,106 @@ describe("API app", () => {
           tenantExternalId: "ten_lat_01",
           tenantName: "Lattice",
           requestedBy: "founder",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(503);
+  });
+
+  it("accepts tenant provisioning runtime callbacks through outbox", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const runtimeCallbackSecret = "test-secret";
+    const app = createApp({ outboxRepository, runtimeCallbackSecret });
+    const callbackPayload = {
+      tenantId,
+      workflowId: "wf-provision-1",
+      dedupeKey: "wf-provision-1",
+      tenantExternalId: "ten_lat_01",
+      tenantName: "Lattice",
+      requestedBy: "founder",
+      callbackId: "cb-1",
+      runtimeRunId: "run-1",
+      progressStep: "paperclip.company.created",
+      progressMessage: "Paperclip company created",
+      progressPercent: 25,
+    };
+    const body = JSON.stringify(callbackPayload);
+    const signature = createHmac("sha256", runtimeCallbackSecret)
+      .update(body)
+      .digest("hex");
+
+    const response = await app.request(
+      "http://localhost/v1/workflows/runtime-callbacks/tenant-provisioning",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-restate-signature": signature,
+        },
+        body,
+      },
+    );
+
+    expect(response.status).toBe(202);
+    const payload = (await response.json()) as { eventType: string };
+    expect(payload.eventType).toBe("workflow.tenant_provisioning.completed.v1");
+
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events).toHaveLength(2);
+    expect(events[0]?.eventType).toBe(
+      "workflow.tenant_provisioning.progress.v1",
+    );
+    expect(events[1]?.eventType).toBe(
+      "workflow.tenant_provisioning.completed.v1",
+    );
+  });
+
+  it("returns 401 for tenant provisioning runtime callbacks with bad signature", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const app = createApp({
+      outboxRepository,
+      runtimeCallbackSecret: "test-secret",
+    });
+
+    const response = await app.request(
+      "http://localhost/v1/workflows/runtime-callbacks/tenant-provisioning",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-restate-signature": "invalid",
+        },
+        body: JSON.stringify({
+          tenantId,
+          workflowId: "wf-provision-1",
+          dedupeKey: "wf-provision-1",
+          tenantExternalId: "ten_lat_01",
+          tenantName: "Lattice",
+          requestedBy: "founder",
+          callbackId: "cb-1",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  it("returns 503 for tenant provisioning runtime callbacks without outbox", async () => {
+    const app = createApp();
+    const response = await app.request(
+      "http://localhost/v1/workflows/runtime-callbacks/tenant-provisioning",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenantId,
+          workflowId: "wf-provision-1",
+          dedupeKey: "wf-provision-1",
+          tenantExternalId: "ten_lat_01",
+          tenantName: "Lattice",
+          requestedBy: "founder",
+          callbackId: "cb-1",
         }),
       },
     );

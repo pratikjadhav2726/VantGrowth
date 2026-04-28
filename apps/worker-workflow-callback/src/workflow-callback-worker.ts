@@ -1,5 +1,6 @@
 import {
   acceptTenantProvisioningWorkflowDeterministic,
+  createTenantProvisioningCompletedOutboxCommand,
   tenantProvisioningWorkflowInputSchema,
 } from "@growthos/core";
 import type { OutboxRepository } from "@growthos/db";
@@ -22,31 +23,18 @@ export class WorkflowCallbackWorker {
   ): Promise<ReturnType<typeof acceptTenantProvisioningWorkflowDeterministic>> {
     const request = tenantProvisioningWorkflowInputSchema.parse(input);
     const result = acceptTenantProvisioningWorkflowDeterministic(request);
-
-    const payload = {
-      workflow_id: result.workflowId,
-      tenant_id: result.tenantId,
-      tenant_external_id: request.tenantExternalId,
-      tenant_name: request.tenantName,
-      provisioning_key: result.provisioningKey,
-      status: result.status,
-      accepted_at: result.acceptedAt.toISOString(),
-      completed_at: new Date().toISOString(),
-    };
-
-    await this.deps.outboxRepository.enqueue({
-      tenantId: result.tenantId,
-      eventType: "workflow.tenant_provisioning.completed.v1",
-      idempotencyKey: `${request.dedupeKey}:completed`,
-      payload,
+    const command = createTenantProvisioningCompletedOutboxCommand({
+      ...request,
+      callbackId: "worker-callback",
     });
+    await this.deps.outboxRepository.enqueue(command);
 
     await this.deps.eventPublisher.publish(
       tenantScopedSubject(
         result.tenantId,
         "workflow.tenant_provisioning.completed.v1",
       ),
-      payload,
+      command.payload,
     );
 
     return result;

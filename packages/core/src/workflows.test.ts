@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   acceptTenantProvisioningWorkflowDeterministic,
   createRestateHelloWorkflowOutboxCommand,
+  createTenantProvisioningCompletedOutboxCommand,
+  createTenantProvisioningProgressOutboxCommand,
   createTenantProvisioningWorkflowOutboxCommand,
   runHelloWorkflowDeterministic,
 } from "./workflows.js";
@@ -68,5 +70,49 @@ describe("restate workflow starter contracts", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.provisioningKey).toContain("ten_lat_01");
+  });
+
+  it("creates tenant provisioning completed outbox command shape", () => {
+    const command = createTenantProvisioningCompletedOutboxCommand({
+      tenantId,
+      workflowId: "wf-provision-1",
+      dedupeKey: "wf-provision-1",
+      tenantExternalId: "ten_lat_01",
+      tenantName: "Lattice",
+      requestedBy: "founder",
+      callbackId: "cb-1",
+      runtimeRunId: "run-1",
+    });
+
+    expect(command.eventType).toBe("workflow.tenant_provisioning.completed.v1");
+    expect(command.idempotencyKey).toContain("cb-1");
+    expect(command.payload).toMatchObject({
+      callback_id: "cb-1",
+      runtime_run_id: "run-1",
+      status: "accepted",
+    });
+  });
+
+  it("creates tenant provisioning progress outbox command shape", () => {
+    const command = createTenantProvisioningProgressOutboxCommand({
+      tenantId,
+      workflowId: "wf-provision-1",
+      dedupeKey: "wf-provision-1",
+      tenantExternalId: "ten_lat_01",
+      tenantName: "Lattice",
+      requestedBy: "founder",
+      callbackId: "cb-1",
+      runtimeRunId: "run-1",
+      progressStep: "paperclip.company.created",
+      progressMessage: "Paperclip company created",
+      progressPercent: 25,
+    });
+
+    expect(command.eventType).toBe("workflow.tenant_provisioning.progress.v1");
+    expect(command.payload).toMatchObject({
+      progress_step: "paperclip.company.created",
+      progress_message: "Paperclip company created",
+      progress_percent: 25,
+    });
   });
 });

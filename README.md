@@ -73,6 +73,8 @@ DATABASE_URL=postgres://... NATS_SERVERS=nats://localhost:4222 pnpm smoke:infra
 - `POST /v1/commands/outbox`
 - `POST /v1/workflows/hello`
 - `POST /v1/workflows/tenant-provisioning`
+- `POST /v1/workflows/runtime-callbacks/tenant-provisioning`
+  (supports optional signature verification via `RESTATE_CALLBACK_SECRET`).
 
 ## Architecture references
 

@@ -121,7 +121,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 |---|---|---:|
 | Phase 0 / Track A (Repo + tooling) | In progress, strong foundation complete | 70% |
 | Phase 0 / Track B (Data plane) | In progress (core schema baseline + contracts started) | 15% |
-| Phase 0 / Track C (Event + workflow plane) | In progress (Postgres outbox + NATS publisher + critique/outbox/learning/attribution/warmth/callback worker starters + loop hardening + notify/lease coordination + Restate hello/tenant-provisioning triggers + typed runtime client seam) | 81% |
+| Phase 0 / Track C (Event + workflow plane) | In progress (Postgres outbox + NATS publisher + critique/outbox/learning/attribution/warmth/callback worker starters + loop hardening + notify/lease coordination + Restate hello/tenant-provisioning triggers + typed runtime client + signed callback ingestion + progress replay contract) | 87% |
 | Phase 0 / Track D (LLM + harness infra) | Not started | 0% |
 | Phase 0 / Track E (Identity/billing/secrets/deploy) | Not started | 0% |
 | Phase 0 / Track F (Paperclip fork hardening) | In progress (`growthos_native`, scheduler leases, Postgres LiveEvents fanout, additive RLS baseline, expanded strict RLS route batch + route tests complete; `issues` labels + expanded reads + low-risk/high-churn mutations with scoped helper cleanup effectively complete) | 99% |
@@ -159,6 +159,8 @@ This section tracks what is already implemented in the `GTM` repo so execution s
   - Restate tenant provisioning trigger slice wired: `@growthos/core` tenant provisioning workflow contracts + deterministic accepted-stub and API `POST /v1/workflows/tenant-provisioning` route that enqueues `workflow.tenant_provisioning.requested.v1` via outbox with tests.
   - Workflow completion callback starter added: `@growthos/worker-workflow-callback` consumes tenant provisioning request contracts and emits `workflow.tenant_provisioning.completed.v1` through outbox + tenant-scoped publish with tests.
   - Typed Restate runtime client seam wired in `@growthos/core` with env-based HTTP client resolution and non-blocking API dispatch hooks for hello + tenant provisioning workflow triggers.
+  - Runtime callback ingestion endpoint wired: API `POST /v1/workflows/runtime-callbacks/tenant-provisioning` parses typed callback payloads and enqueues `workflow.tenant_provisioning.completed.v1` idempotently using callback IDs.
+  - Runtime callback security + replay hardening wired: optional HMAC signature validation (`RESTATE_CALLBACK_SECRET`) and explicit `workflow.tenant_provisioning.progress.v1` replay contract emitted before completion events.
   - `@growthos/infra-smoke` app added for opt-in live Postgres outbox + NATS JetStream smoke verification.
 - **Phase 0 / Track F Paperclip fork starter**
   - Local Paperclip fork now recognizes `growthos_native` as a built-in adapter type.
@@ -192,7 +194,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 ### In progress / not yet implemented
 
 - **Phase 0 / Track B** data plane provisioning and migrations (`Drizzle`, `Atlas`, Postgres schemas) not yet implemented.
-- **Phase 0 / Track C** durable event/workflow plane (`NATS JetStream`, `Restate`, outbox publisher) is still incomplete; `worker-signal-router`, `worker-critique`, `worker-outbox-publisher`, `worker-learning`, `worker-attribution`, `worker-warmth`, and `worker-workflow-callback` starters are implemented, with Restate hello/tenant-provisioning starter triggers and typed runtime dispatch seam wired through the API/outbox path.
+- **Phase 0 / Track C** durable event/workflow plane (`NATS JetStream`, `Restate`, outbox publisher) is still incomplete; `worker-signal-router`, `worker-critique`, `worker-outbox-publisher`, `worker-learning`, `worker-attribution`, `worker-warmth`, and `worker-workflow-callback` starters are implemented, with Restate hello/tenant-provisioning starter triggers, typed runtime dispatch seam, signed runtime callback ingestion, and progress replay contracts wired through the API/outbox path.
 - **Phase 0 / Track D/E** LLM gateway deployment, secrets, identity, billing, and GitOps deploy tracks not yet implemented.
 - **Phase 0 / Track F** Paperclip fork strict RLS enforcement is not yet complete across all company-scoped routes; dashboard, goals, activity, inbox-dismissals, sidebar project preferences, sidebar-badges, user-profile, company-skills, costs/budget, environments, approvals, assets, projects list/get/create/update + workspace CRUD + runtime control, secrets, routines, and the current `issues` labels + expanded read/mutation (including approvals, work-products, documents, checkout/release, interaction decisions, delete/create-interaction, queued comment cancel, issue comment add/reopen flow DB paths, and scoped expired-interaction helper usage) batch are converted reference paths.
 - **Phase 1 agents/workers/UI** (Intel/Inbound/Reporting, approval queue UI, weekly review) not yet implemented.
@@ -201,7 +203,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 
 1. Continue Paperclip fork hardening: final verification pass for residual unscoped `issues` branches and close any remaining gaps; then pivot primary effort to Track C (`outbox publisher` progress) and Track B migration/provisioning groundwork.
 2. Run live infrastructure smoke against local Postgres + NATS once services and streams are running.
-3. Run live infrastructure smoke against local Postgres + NATS + worker loop once streams are configured, then wire real Restate ack/completion ingestion path from runtime callbacks.
+3. Run live infrastructure smoke against local Postgres + NATS + worker loop once streams are configured, then replace deterministic acceptance/result stubs with runtime-verified callback state transitions and replayed progress from Restate execution history.
 
 ---
 
