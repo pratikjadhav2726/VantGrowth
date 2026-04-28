@@ -3,6 +3,8 @@ import { z } from "zod";
 const baseSmokeEnvSchema = z.object({
   DATABASE_URL: z.string().url(),
   NATS_SERVERS: z.string().min(1).default("nats://localhost:4222"),
+  /** JetStream stream name that stores worker-style subjects (`t.<tenant>.…`). */
+  GROWTHOS_JETSTREAM_STREAM: z.string().min(1).default("GROWTHOS"),
   GROWTHOS_SMOKE_TENANT_ID: z
     .string()
     .uuid()

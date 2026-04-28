@@ -4,7 +4,7 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "files": ["dist", "src", "drizzle", "ci"],
+  "files": ["dist", "src", "drizzle", "ci", "atlas.hcl"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "lint": "biome check src",
@@ -13,7 +13,10 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "migrate:dry-run": "tsx src/migrate-dry-run-cli.ts"
+    "migrate:dry-run": "tsx src/migrate-dry-run-cli.ts",
+    "db:atlas-hash": "atlas migrate hash --env growthos",
+    "db:atlas-validate": "atlas migrate validate --env growthos",
+    "db:atlas-lint": "atlas migrate lint --env growthos --latest 1 --dev-url \"${ATLAS_LINT_DEV_URL:-docker://postgres/16/dev?search_path=public}\""
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

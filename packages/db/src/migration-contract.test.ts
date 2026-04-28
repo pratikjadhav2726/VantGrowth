@@ -11,6 +11,17 @@ const migrationPath = new URL(
   import.meta.url,
 );
 
+const atlasSumPath = new URL("../drizzle/atlas.sum", import.meta.url);
+
+describe("Atlas migration integrity (drizzle/)", () => {
+  it("has atlas.sum aligned with Drizzle SQL migration file", async () => {
+    const sum = await readFile(atlasSumPath, "utf8");
+    expect(sum.trim().length).toBeGreaterThan(0);
+    expect(sum).toContain("0000_yielding_inertia.sql");
+    expect(sum).toMatch(/^h1:[A-Za-z0-9+/=]+=/m);
+  });
+});
+
 describe("drizzle migration: 0000_yielding_inertia", () => {
   it("creates all five tenant-scoped tables", async () => {
     const sql = await readFile(migrationPath, "utf8");

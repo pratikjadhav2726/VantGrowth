@@ -8,6 +8,7 @@ describe("parseSmokeEnv", () => {
     });
     expect(env.DATABASE_URL).toContain("postgres://");
     expect(env.NATS_SERVERS).toBe("nats://localhost:4222");
+    expect(env.GROWTHOS_JETSTREAM_STREAM).toBe("GROWTHOS");
   });
 
   it("rejects Restate base URL without workflow id", () => {

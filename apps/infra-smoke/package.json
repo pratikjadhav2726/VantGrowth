@@ -15,6 +15,7 @@
   "dependencies": {
     "@growthos/core": "workspace:^",
     "@growthos/db": "workspace:*",
+    "@growthos/worker-outbox-publisher": "workspace:*",
     "nats": "^2.29.3",
     "zod": "^3.23.8"
   },

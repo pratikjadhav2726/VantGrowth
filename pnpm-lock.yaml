@@ -57,6 +57,9 @@ importers:
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@growthos/worker-outbox-publisher':
+        specifier: workspace:*
+        version: link:../worker-outbox-publisher
       nats:
         specifier: ^2.29.3
         version: 2.29.3

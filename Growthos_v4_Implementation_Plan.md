@@ -119,8 +119,8 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 
 | Phase / Track | Status | Progress |
 |---|---|---:|
-| Phase 0 / Track A (Repo + tooling) | In progress (GitHub Actions: Biome + typecheck + tests + Postgres `migrate:dry-run` on PR/push, same script as local) | 88% |
-| Phase 0 / Track B (Data plane) | In progress (Drizzle ORM schema + drizzle-kit migrations + full repository layer migrated from raw SQL; CI validates migration apply on ephemeral Postgres) | 40% |
+| Phase 0 / Track A (Repo + tooling) | In progress (GitHub Actions: Biome + typecheck + tests + Postgres **`migrate:dry-run` + Atlas validate/lint** on PR/push; root **Docker Compose** for local Postgres + NATS JetStream + `GROWTHOS` stream bootstrap) | 92% |
+| Phase 0 / Track B (Data plane) | In progress (Drizzle ORM + drizzle-kit + **Atlas validate + migrate lint** on `drizzle/` + `atlas.sum`; CI applies SQL then lints on scratch Postgres; pgroll/expand-contract apply not wired yet) | 52% |
 | Phase 0 / Track C (Event + workflow plane) | In progress (Postgres outbox + NATS publisher + all worker starters + loop hardening + notify/lease coordination + Restate triggers + typed runtime client + signed callback ingestion + progress replay contract + workflow state machine + callbackType routing + failed terminal event + progress-only endpoint + **persistent workflow_runs state store + real CAS-based transition enforcement + NATS-driven workflow-callback consumer + runtime-history-verified terminal state emission + infra-smoke Restate state contract hook**) | 100% |
 | Phase 0 / Track D (LLM + harness infra) | Not started | 0% |
 | Phase 0 / Track E (Identity/billing/secrets/deploy) | Not started | 0% |
@@ -135,7 +135,9 @@ This section tracks what is already implemented in the `GTM` repo so execution s
   - Monorepo scaffolded with `pnpm`, `turbo`, `typescript`, `biome`, `vitest`.
   - Packages created: `@growthos/core`, `@growthos/api`, `@growthos/adapter`, `@growthos/skills`, `@growthos/design-system`, `@growthos/test-utils`.
   - Workspace validation commands are green (`pnpm check`, `pnpm typecheck`, `pnpm test`).
-  - **GitHub Actions CI** (`.github/workflows/ci.yml`): on push/PR to `main` or `master`, runs `pnpm check`, `pnpm typecheck`, `pnpm test`, plus a **Postgres migration dry-run** job (Postgres 16 service) that runs `pnpm --filter @growthos/db migrate:dry-run` — the same entrypoint as local (`pnpm migrate:dry-run` from repo root).
+  - **GitHub Actions CI** (`.github/workflows/ci.yml`): on push/PR to `main` or `master`, runs `pnpm check`, `pnpm typecheck`, `pnpm test`, plus **`migration-dry-run`** (Postgres 16 service): `pnpm --filter @growthos/db migrate:dry-run` (same as local `pnpm migrate:dry-run`), then Atlas steps below.
+  - **Atlas in CI** (same **`migration-dry-run`** job as Postgres apply): after `migrate:dry-run`, installs Atlas **v1.2.0** via [`ariga/setup-atlas@v0.3`](https://github.com/ariga/setup-atlas), runs **`atlas migrate validate`** (`drizzle/atlas.sum` vs SQL), creates scratch DB **`atlas_lint`**, then **`atlas migrate lint --latest 1`** with destructive policy from [`packages/db/atlas.hcl`](packages/db/atlas.hcl). Local: `pnpm atlas:validate`, `pnpm atlas:lint` with `ATLAS_LINT_DEV_URL` or Docker; after SQL edits: `pnpm --filter @growthos/db db:atlas-hash`.
+  - **Local Docker Compose** (`compose.yaml` + `pnpm infra:up` / `infra:down` / `infra:ps`): Postgres 16 on host **5488**, NATS JetStream on **4228** (monitor **8228**), persistent volumes, and **`jetstream-init`** (`natsio/nats-box`) idempotently creates JetStream stream **`GROWTHOS`** with **`t.>`** so `pnpm migrate:dry-run` and `pnpm smoke:infra` work without hand-rolled NATS stream setup.
 - **Phase 1 / S2 Domain starter**
   - Deterministic `Motion Engine` starter implemented in `@growthos/core` with versioned scorer output and tests.
 - **Phase 0 / Track B Data-plane starter**
@@ -145,7 +147,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
     - `drizzle.config.ts` configures drizzle-kit for `drizzle-kit generate` / `drizzle-kit migrate` / `drizzle-kit studio`.
     - `drizzle/0000_yielding_inertia.sql` is the auto-generated migration (all DDL derived from `schema.ts`), with RLS `ENABLE`/`FORCE`/`CREATE POLICY` statements appended post-generation as security invariants.
     - `src/db.ts` exports `createDb`, `createDbFromEnv`, and `GrowthOsDb` (typed Drizzle client).
-    - `scripts: { "db:generate", "db:migrate", "db:studio" }` added to `package.json`.
+    - `scripts: { "db:generate", "db:migrate", "db:studio", "db:atlas-hash", "db:atlas-validate", "db:atlas-lint" }` added to `package.json`; **`atlas.hcl`** + committed **`drizzle/atlas.sum`** integrate [Atlas](https://atlasgo.io/) migration-directory integrity and lint policy (`pnpm atlas:validate`, `pnpm atlas:lint`; CI runs both after `migrate:dry-run`).
   - All raw SQL strings removed from repositories; `PostgresOutboxRepository` and `PostgresWorkflowRunRepository` use typed Drizzle query builder (`insert`, `select`, `update`, `onConflictDoNothing`, `returning`, `limit`, `orderBy`).
   - Tenant RLS context set via `tx.execute(sql\`SELECT set_config...\`)` inside Drizzle transactions — no `BEGIN`/`COMMIT`/`ROLLBACK` boilerplate; Drizzle manages the transaction lifecycle.
   - `PostgresCycleLeaseGuard` in `worker-outbox-publisher` migrated from raw `PgPool` to Drizzle `db.transaction` + `tx.execute` for `pg_try_advisory_xact_lock`.
@@ -192,7 +194,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
     - Terminal state invariant enforced at both the in-memory layer (guard check before mutation) and the Postgres layer (`AND state NOT IN ('completed', 'failed')` in `UPDATE`).
   - **Callback route upgraded**: reads stored `WorkflowRun` state before transition, performs `validateWorkflowTransition`, executes `transitionState` CAS, returns `409 Conflict` on illegal transition or concurrent update. Gracefully degrades to permissive validation when no state store is configured.
   - **`POST /v1/workflows/tenant-provisioning`** now calls `upsertRequested` to durably record the workflow run as `requested` before emitting the outbox event.
-  - `@growthos/infra-smoke` app added for opt-in live Postgres outbox + NATS JetStream smoke verification; extended with optional Restate `getTenantProvisioningRuntimeState` verification when `RESTATE_BASE_URL` + `GROWTHOS_SMOKE_WORKFLOW_ID` are set together; includes `parseSmokeEnv` Zod validation + unit tests.
+  - `@growthos/infra-smoke` app added for opt-in live Postgres outbox + NATS JetStream smoke verification; uses **`OutboxPublisher` + `NatsJetStreamPublisher`** from `@growthos/worker-outbox-publisher` to drain the enqueued row (production path), asserts `consumed_at` via empty `listUnconsumed`, then reads JetStream with **`last_by_subj`** on `t.<tenant>.growthos.infra_smoke.v1` and validates payload; optional Restate `getTenantProvisioningRuntimeState` when `RESTATE_BASE_URL` + `GROWTHOS_SMOKE_WORKFLOW_ID` are set together; `parseSmokeEnv` + unit tests.
 - **Phase 0 / Track F Paperclip fork starter**
   - Local Paperclip fork now recognizes `growthos_native` as a built-in adapter type.
   - Server adapter registry, shared adapter constants, and UI adapter/display registry updated.
@@ -224,7 +226,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 
 ### In progress / not yet implemented
 
-- **Phase 0 / Track B** production data-plane provisioning (Atlas + pgroll expand/contract, ClickHouse/Qdrant/Valkey topology, `seed dev`) not yet implemented; **Drizzle schema + drizzle-kit migrations + repositories** are in-repo; **CI and developers share `migrate:dry-run`** against ephemeral or local Postgres (bootstrap SQL + generated migration + table checks).
+- **Phase 0 / Track B** production data-plane provisioning (Atlas/pgroll **expand–contract apply**, ClickHouse/Qdrant/Valkey topology, `seed dev`) not yet implemented; **Drizzle schema + drizzle-kit migrations + repositories** are in-repo; **CI and developers share `migrate:dry-run`** against ephemeral or local Postgres; **Atlas** guards migration SQL via **`migrate validate` + `drizzle/atlas.sum`** and **`migrate lint`** (destructive DDL) in CI (`pnpm atlas:validate` / `pnpm atlas:lint` locally).
 - **Phase 0 / Track C** durable event/workflow plane (`NATS JetStream`, `Restate`, outbox publisher) is still incomplete at *production topology* level (multi-node clusters, stream topology from stack decisions, SigNoz tracing); code-path wiring is complete including `infra-smoke` optional Restate state verification. Outstanding: run smoke + callback worker against live stacks and harden Restate ingress to the documented `GET /workflows/tenant-provisioning/:workflowId/state` contract in your deployment.
 - **Phase 0 / Track D/E** LLM gateway deployment, secrets, identity, billing, and GitOps deploy tracks not yet implemented.
 - **Phase 0 / Track F** Paperclip fork strict RLS enforcement is not yet complete across all company-scoped routes; dashboard, goals, activity, inbox-dismissals, sidebar project preferences, sidebar-badges, user-profile, company-skills, costs/budget, environments, approvals, assets, projects list/get/create/update + workspace CRUD + runtime control, secrets, routines, and the current `issues` labels + expanded read/mutation (including approvals, work-products, documents, checkout/release, interaction decisions, delete/create-interaction, queued comment cancel, issue comment add/reopen flow DB paths, and scoped expired-interaction helper usage) batch are converted reference paths.
@@ -232,9 +234,9 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 
 ### Active next milestones (execution order)
 
-1. **Track B groundwork** — wire **Atlas** migration runner around Drizzle-generated SQL (`packages/db/drizzle/`). **Done:** shared **`pnpm migrate:dry-run`** (`@growthos/db` + CI) applies bootstrap + migration via `pg` with Drizzle-aware splitting and post-apply table checks.
-2. **Operational smoke runs** — execute `pnpm smoke:infra` against local Postgres + NATS + JetStream stream; with Restate up, add `RESTATE_BASE_URL` + `GROWTHOS_SMOKE_WORKFLOW_ID` to validate runtime state JSON contract.
-3. **Outbox drain e2e** — run `worker-outbox-publisher` + confirm JetStream consumer receives published subjects for smoke + workflow events.
+1. **Track B groundwork** — **Done:** shared **`pnpm migrate:dry-run`** (`@growthos/db` + CI) applies bootstrap + migration via `pg` with Drizzle-aware splitting and post-apply table checks. **Done:** **Atlas `migrate validate`** + `drizzle/atlas.sum` + CI job (`ariga/setup-atlas@v0.3`, Atlas v1.2.0). **Next:** Atlas/pgroll **expand–contract** workflows and production `migrate apply` runner beyond integrity checks.
+2. **Operational smoke runs** — `pnpm infra:up` then `pnpm migrate:dry-run` + `pnpm smoke:infra` against Compose Postgres (**5488**) + NATS (**4228**); with Restate up, add `RESTATE_BASE_URL` + `GROWTHOS_SMOKE_WORKFLOW_ID` for runtime state JSON. `infra-smoke` drains via **`OutboxPublisher`** and verifies JetStream with **`last_by_subj`** on the worker subject.
+3. **Outbox drain e2e** — `pnpm smoke:infra` now runs **`OutboxPublisher` + `NatsJetStreamPublisher`** from `@growthos/worker-outbox-publisher` after enqueue (same drain path as production), asserts the outbox row is consumed, and reads JetStream via `last_by_subj` on `t.<tenant>.growthos.infra_smoke.v1`. Running the full **polling worker** against live stacks for workflow traffic remains a separate operational check.
 4. Continue Paperclip fork final verification pass for any residual unscoped `issues` branches.
 
 ---
