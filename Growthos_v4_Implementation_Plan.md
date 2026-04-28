@@ -121,10 +121,10 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 |---|---|---:|
 | Phase 0 / Track A (Repo + tooling) | In progress, strong foundation complete | 70% |
 | Phase 0 / Track B (Data plane) | In progress (core schema baseline + contracts started) | 15% |
-| Phase 0 / Track C (Event + workflow plane) | In progress (Postgres outbox + NATS publisher started) | 20% |
+| Phase 0 / Track C (Event + workflow plane) | In progress (Postgres outbox + NATS publisher + critique worker starter) | 28% |
 | Phase 0 / Track D (LLM + harness infra) | Not started | 0% |
 | Phase 0 / Track E (Identity/billing/secrets/deploy) | Not started | 0% |
-| Phase 0 / Track F (Paperclip fork hardening) | In progress (`growthos_native` + scheduler lease hardening complete; RLS/live-events pending) | 40% |
+| Phase 0 / Track F (Paperclip fork hardening) | In progress (`growthos_native`, scheduler leases, Postgres LiveEvents fanout, additive RLS baseline, expanded strict RLS route batch + route tests complete; `issues` labels + expanded reads + low-risk mutation + approvals RLS batches underway) | 99% |
 | Phase 1 / S1 (Adapter + tenant provisioning starter) | In progress (adapter/API scaffolding complete) | 40% |
 | Phase 1 / S2 (Motion Engine starter) | In progress (deterministic scorer v1 starter complete) | 30% |
 | Phase 1 / S3-S6 (Agents/UI/learning loop) | Not started | 0% |
@@ -148,6 +148,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
   - Real NATS JetStream publisher implemented using the `nats` client.
   - Signal Router service implemented with deterministic stage-1 classification, outbox enqueue, and tenant-scoped NATS publishing.
   - Worker tests cover routing, duplicate signal idempotency, and JetStream publish boundary.
+  - `@growthos/worker-critique` starter app added with schema-first critique contracts, deterministic scoring stub, idempotent outbox write, tenant-scoped NATS publish, and unit tests.
   - `@growthos/infra-smoke` app added for opt-in live Postgres outbox + NATS JetStream smoke verification.
 - **Phase 0 / Track F Paperclip fork starter**
   - Local Paperclip fork now recognizes `growthos_native` as a built-in adapter type.
@@ -156,6 +157,10 @@ This section tracks what is already implemented in the `GTM` repo so execution s
   - Adapter registry/UI registry tests added in the Paperclip fork.
   - Paperclip fork install blocker fixed by adding `node-addon-api` for `sharp` native builds.
   - Scheduler lease runner added around heartbeat timers, routine schedules, and heartbeat recovery. It uses Postgres advisory transaction locks plus an in-process overlap guard.
+  - LiveEvents fanout upgraded from process-local only to optional Postgres `LISTEN/NOTIFY` cross-process fanout with origin IDs to avoid echo loops.
+  - Additive company-scoped RLS readiness migration added in the Paperclip fork. It enables RLS and policy generation while staying compatible until strict request-scoped DB context is wired.
+  - Strict RLS transaction helper added in the Paperclip server and applied to dashboard plus company-scoped `goals`, `activity`, `inbox-dismissals`, sidebar project-preference, sidebar-badges, user-profile, company-skills, costs/budget, environments, approvals, assets upload/content, projects list/get/create/update + workspace CRUD + runtime control, secrets, routines (list/detail/update/triggers/run), and `issues` labels (list/create/delete), company list, expanded read paths (`GET /issues/:id`, `GET /issues/:id/heartbeat-context`, `GET /issues/:id/work-products`, `GET /issues/:id/documents`, `GET /issues/:id/documents/:key`, `GET /issues/:id/documents/:key/revisions`, `GET /issues/:id/comments`, `GET /issues/:id/interactions`), low-risk mutations (`POST/DELETE /issues/:id/read`, `POST/DELETE /issues/:id/inbox-archive`), and approvals link management (`GET/POST/DELETE /issues/:id/approvals...`).
+  - Focused route tests now assert strict RLS scoping for company-scoped `goals`, `activity`, `inbox-dismissals`, sidebar project-preference, sidebar-badges, user-profile, company-skills, costs/budget, environments, approvals list/decision/comment, assets reads/writes, projects list/get/create/update + workspace CRUD + runtime control, secrets, routines list/detail/update/triggers/run flows, and `issues` labels + expanded read/mutation + approvals scope entry with pre-scope auth rejection checks.
 - **Phase 1 / S1 Adapter starter**
   - `growthos_native` adapter contract scaffolded in `@growthos/adapter`.
   - Typed `PaperclipClient` implemented (company, agent, issue, checkout, release, wakeup operations).
@@ -177,16 +182,16 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 ### In progress / not yet implemented
 
 - **Phase 0 / Track B** data plane provisioning and migrations (`Drizzle`, `Atlas`, Postgres schemas) not yet implemented.
-- **Phase 0 / Track C** durable event/workflow plane (`NATS JetStream`, `Restate`, outbox publisher) not yet implemented.
+- **Phase 0 / Track C** durable event/workflow plane (`NATS JetStream`, `Restate`, outbox publisher) is still incomplete; `worker-signal-router` and `worker-critique` starters are implemented.
 - **Phase 0 / Track D/E** LLM gateway deployment, secrets, identity, billing, and GitOps deploy tracks not yet implemented.
-- **Phase 0 / Track F** Paperclip fork hardening deltas (RLS and LiveEvents replacement) are not yet complete.
-- **Phase 1 agents/workers/UI** (Intel/Inbound/Reporting, critique worker, approval queue UI, weekly review) not yet implemented.
+- **Phase 0 / Track F** Paperclip fork strict RLS enforcement is not yet complete across all company-scoped routes; dashboard, goals, activity, inbox-dismissals, sidebar project preferences, sidebar-badges, user-profile, company-skills, costs/budget, environments, approvals, assets, projects list/get/create/update + workspace CRUD + runtime control, secrets, routines, and the current `issues` labels + expanded read/low-risk mutation/approvals batch are converted reference paths.
+- **Phase 1 agents/workers/UI** (Intel/Inbound/Reporting, approval queue UI, weekly review) not yet implemented.
 
 ### Active next milestones (execution order)
 
-1. Continue Paperclip fork hardening: add additive tenant/RLS baseline and cross-process LiveEvents fanout.
+1. Continue Paperclip fork hardening: continue `issues` route migration in focused batches (next: remaining mutation-heavy issue paths such as document restore/update/delete, checkout/release, and interaction decisions) with companion RLS tests.
 2. Run live infrastructure smoke against local Postgres + NATS once services and streams are running.
-3. Implement next workers (`worker-critique`, outbox publisher) with the same idempotent contract shape as `worker-signal-router`.
+3. Implement next workers (`outbox publisher`, then `worker-learning`) with the same idempotent contract shape as `worker-signal-router`/`worker-critique`.
 
 ---
 

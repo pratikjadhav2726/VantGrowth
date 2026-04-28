@@ -40,6 +40,7 @@ pnpm dev
 - `packages/design-system`: initial token set.
 - `packages/test-utils`: shared fixtures.
 - `apps/worker-signal-router`: Signal Router worker with Postgres outbox + NATS JetStream publisher.
+- `apps/worker-critique`: Critique worker starter with idempotent outbox + tenant-scoped publish contract.
 - `apps/infra-smoke`: opt-in live Postgres/NATS smoke check.
 
 ## Live infrastructure smoke
