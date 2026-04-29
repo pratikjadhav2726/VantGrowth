@@ -7,7 +7,11 @@
 
 "use client";
 
-import { ingestSignal } from "@/lib/api-client";
+import {
+  type SignalGradeApiResponse,
+  ingestSignal,
+  postSignalGrade,
+} from "@/lib/api-client";
 import { useState } from "react";
 
 const DEV_TENANT_ID =
@@ -38,6 +42,34 @@ export default function SignalsPage() {
     signalId: string;
   } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [gradeStatus, setGradeStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [gradeResult, setGradeResult] = useState<SignalGradeApiResponse | null>(
+    null,
+  );
+
+  const handlePreviewGrade = async () => {
+    if (!source.trim()) return;
+    setGradeStatus("loading");
+    setGradeResult(null);
+    setErrorMessage(null);
+
+    try {
+      const res = await postSignalGrade(DEV_TENANT_ID, {
+        signalType,
+        source: source.trim(),
+        payload: note.trim() ? { note: note.trim() } : {},
+      });
+      setGradeResult(res);
+      setGradeStatus("ready");
+    } catch (err) {
+      setGradeStatus("error");
+      setErrorMessage(
+        err instanceof Error ? err.message : "Failed to grade signal.",
+      );
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,6 +88,8 @@ export default function SignalsPage() {
       });
       setResult({ inserted: res.inserted, signalId: res.signalId });
       setStatus("success");
+      setGradeStatus("idle");
+      setGradeResult(null);
       setSource("");
       setNote("");
       setExternalId("");
@@ -175,6 +209,14 @@ export default function SignalsPage() {
         {/* Submit */}
         <div className="mt-6 flex items-center gap-3">
           <button
+            type="button"
+            disabled={gradeStatus === "loading" || !source.trim()}
+            onClick={handlePreviewGrade}
+            className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2"
+          >
+            {gradeStatus === "loading" ? "Grading…" : "Preview signal grade"}
+          </button>
+          <button
             type="submit"
             disabled={status === "loading" || !source.trim()}
             className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2"
@@ -209,6 +251,34 @@ export default function SignalsPage() {
             )}
           </button>
         </div>
+
+        {/* Grade preview */}
+        {gradeStatus === "ready" && gradeResult && (
+          <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-4">
+            {gradeResult.graded && gradeResult.grade ? (
+              <>
+                <p className="text-sm font-medium text-blue-900">
+                  Signal grade: {Math.round(gradeResult.grade.relevance * 100)}{" "}
+                  / 100 · {gradeResult.grade.urgency}
+                </p>
+                <p className="mt-1 text-xs text-blue-700">
+                  Topic: {gradeResult.grade.topicCategory}
+                </p>
+                {gradeResult.grade.actionRecommendations.length > 0 && (
+                  <ul className="mt-2 list-disc pl-5 text-xs text-blue-700">
+                    {gradeResult.grade.actionRecommendations.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-blue-800">
+                No grade could be derived from the current signal payload.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Status messages */}
         {status === "success" && result && (

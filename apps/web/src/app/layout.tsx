@@ -1,5 +1,7 @@
+import { getSession } from "@/lib/auth-session";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { logoutAction } from "./login/actions";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,9 +16,11 @@ const navItems = [
   { href: "/weekly-review", label: "Weekly Review" },
 ];
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const session = await getSession();
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-gray-50 antialiased">
@@ -35,23 +39,40 @@ export default function RootLayout({
             </Link>
 
             {/* Nav links */}
-            <nav className="flex items-center gap-1">
-              {navItems.map(({ href, label }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className="rounded-md px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
-                >
-                  {label}
-                </Link>
-              ))}
-            </nav>
+            {session && (
+              <nav className="flex items-center gap-1">
+                {navItems.map(({ href, label }) => (
+                  <Link
+                    key={href}
+                    href={href}
+                    className="rounded-md px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+                  >
+                    {label}
+                  </Link>
+                ))}
+              </nav>
+            )}
 
-            {/* Right side: dev badge */}
-            <div className="ml-auto">
+            {/* Right side: session + env badge */}
+            <div className="ml-auto flex items-center gap-3">
               <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">
                 Phase 1 Dev
               </span>
+              {session && (
+                <>
+                  <span className="text-xs text-gray-500">
+                    {session.userId}
+                  </span>
+                  <form action={logoutAction}>
+                    <button
+                      type="submit"
+                      className="rounded-md border border-gray-300 px-2.5 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                    >
+                      Sign out
+                    </button>
+                  </form>
+                </>
+              )}
             </div>
           </div>
         </header>
