@@ -1,0 +1,3 @@
+name: growthos-infra
+runtime: nodejs
+description: GrowthOS infrastructure stub (extend with your cloud provider)

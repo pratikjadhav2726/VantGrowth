@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: growthos-web
+  labels:
+    app.kubernetes.io/name: growthos-web
+    app.kubernetes.io/component: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: growthos-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: growthos-web
+        app.kubernetes.io/component: web
+    spec:
+      containers:
+        - name: web
+          # Replace with your registry image built from apps/web
+          image: ghcr.io/your-org/growthos-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: NODE_ENV
+              value: production
+            # NEXT_PUBLIC_* and server-side API URL: set per environment
+            - name: GROWTHOS_API_BASE_URL
+              value: "http://growthos-api.growthos.svc.cluster.local"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi

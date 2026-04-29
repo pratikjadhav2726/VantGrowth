@@ -117,6 +117,10 @@ pnpm infra:ps          # container status
 pnpm infra:down        # stop and remove volumes (wipes all data)
 ```
 
+### Kubernetes / GitOps (optional)
+
+Reference manifests for **K3s** or any Kubernetes cluster live under [`deploy/gitops/`](deploy/gitops/): Kustomize base + `dev` overlay, sample **Argo CD** `Application`, and placeholder container images. See [`deploy/gitops/README.md`](deploy/gitops/README.md). Optional **Pulumi** bootstrap: [`deploy/pulumi/README.md`](deploy/pulumi/README.md).
+
 After `infra:up` is healthy, apply migrations + seed a dev tenant:
 
 ```bash

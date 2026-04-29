@@ -49,9 +49,19 @@ function StepIndicator({ current }: { current: number }) {
                   }`}
                 >
                   {done ? (
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2.5}
+                    >
                       <title>Done</title>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M5 13l4 4L19 7"
+                      />
                     </svg>
                   ) : (
                     s.n
@@ -84,7 +94,10 @@ function CompanyStep({ defaults }: { defaults: Record<string, string> }) {
   return (
     <form action={submitCompanyStep} className="space-y-5">
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5" htmlFor="companyName">
+        <label
+          className="block text-sm font-medium text-gray-700 mb-1.5"
+          htmlFor="companyName"
+        >
           Company name <span className="text-red-500">*</span>
         </label>
         <input
@@ -99,7 +112,10 @@ function CompanyStep({ defaults }: { defaults: Record<string, string> }) {
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5" htmlFor="website">
+        <label
+          className="block text-sm font-medium text-gray-700 mb-1.5"
+          htmlFor="website"
+        >
           Website
         </label>
         <input
@@ -113,7 +129,10 @@ function CompanyStep({ defaults }: { defaults: Record<string, string> }) {
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5" htmlFor="icpDescription">
+        <label
+          className="block text-sm font-medium text-gray-700 mb-1.5"
+          htmlFor="icpDescription"
+        >
           Ideal customer profile (ICP) <span className="text-red-500">*</span>
         </label>
         <textarea
@@ -129,7 +148,10 @@ function CompanyStep({ defaults }: { defaults: Record<string, string> }) {
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5" htmlFor="headcount">
+          <label
+            className="block text-sm font-medium text-gray-700 mb-1.5"
+            htmlFor="headcount"
+          >
             Team size
           </label>
           <select
@@ -146,7 +168,10 @@ function CompanyStep({ defaults }: { defaults: Record<string, string> }) {
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5" htmlFor="arr">
+          <label
+            className="block text-sm font-medium text-gray-700 mb-1.5"
+            htmlFor="arr"
+          >
             Current ARR
           </label>
           <select
@@ -184,7 +209,10 @@ function BrandStep({ defaults }: { defaults: Record<string, string> }) {
   return (
     <form action={submitBrandStep} className="space-y-5">
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5" htmlFor="positioning">
+        <label
+          className="block text-sm font-medium text-gray-700 mb-1.5"
+          htmlFor="positioning"
+        >
           One-sentence positioning <span className="text-red-500">*</span>
         </label>
         <textarea
@@ -223,7 +251,10 @@ function BrandStep({ defaults }: { defaults: Record<string, string> }) {
       </fieldset>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5" htmlFor="tone">
+        <label
+          className="block text-sm font-medium text-gray-700 mb-1.5"
+          htmlFor="tone"
+        >
           Communication tone
         </label>
         <select
@@ -232,15 +263,24 @@ function BrandStep({ defaults }: { defaults: Record<string, string> }) {
           defaultValue={defaults.tone ?? "founder-voice"}
           className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
         >
-          <option value="founder-voice">Founder voice (direct, opinionated)</option>
-          <option value="professional">Professional (structured, formal)</option>
-          <option value="conversational">Conversational (warm, approachable)</option>
+          <option value="founder-voice">
+            Founder voice (direct, opinionated)
+          </option>
+          <option value="professional">
+            Professional (structured, formal)
+          </option>
+          <option value="conversational">
+            Conversational (warm, approachable)
+          </option>
           <option value="technical">Technical (precise, detail-rich)</option>
         </select>
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5" htmlFor="wordsToAvoid">
+        <label
+          className="block text-sm font-medium text-gray-700 mb-1.5"
+          htmlFor="wordsToAvoid"
+        >
           Words / phrases to avoid
         </label>
         <input
@@ -319,8 +359,13 @@ async function ScoreRevealStep({
     scoreError = "Could not connect to API — showing sample results.";
   }
 
-  const primaryMotions = motionData?.latestStack?.primaryMotions ?? ["inbound_content", "community_led"];
-  const secondaryMotions = motionData?.latestStack?.secondaryMotions ?? ["partner_referral"];
+  const primaryMotions = motionData?.latestStack?.primaryMotions ?? [
+    "inbound_content",
+    "community_led",
+  ];
+  const secondaryMotions = motionData?.latestStack?.secondaryMotions ?? [
+    "partner_referral",
+  ];
 
   const motionLabel: Record<string, string> = {
     inbound_content: "Inbound Content",
@@ -473,11 +518,12 @@ function CompleteStep({ companyName }: { companyName: string | undefined }) {
 export default async function OnboardingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ step?: string }>;
+  searchParams: Promise<{ step?: string; error?: string }>;
 }) {
-  const { step: stepParam } = await searchParams;
+  const { step: stepParam, error: errorParam } = await searchParams;
   const state = await getOnboardingState();
   const step = Math.max(1, Math.min(4, Number(stepParam ?? state.step ?? 1)));
+  const errorMessage = errorParam?.trim() ? errorParam : undefined;
 
   const stepTitles = [
     "Tell us about your company",
@@ -503,6 +549,12 @@ export default async function OnboardingPage({
         </p>
       </div>
 
+      {errorMessage && (
+        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {errorMessage}
+        </div>
+      )}
+
       <StepIndicator current={step} />
 
       <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
@@ -510,7 +562,9 @@ export default async function OnboardingPage({
           <h2 className="text-lg font-semibold text-gray-900">
             {stepTitles[step - 1]}
           </h2>
-          <p className="mt-1 text-sm text-gray-500">{stepSubtitles[step - 1]}</p>
+          <p className="mt-1 text-sm text-gray-500">
+            {stepSubtitles[step - 1]}
+          </p>
         </div>
 
         {step === 1 && (

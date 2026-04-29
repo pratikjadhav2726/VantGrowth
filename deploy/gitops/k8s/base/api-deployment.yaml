@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: growthos-api
+  labels:
+    app.kubernetes.io/name: growthos-api
+    app.kubernetes.io/component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: growthos-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: growthos-api
+        app.kubernetes.io/component: api
+    spec:
+      containers:
+        - name: api
+          # Replace with your registry image built from apps/api
+          image: ghcr.io/your-org/growthos-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+            - name: NODE_ENV
+              value: production
+            # DATABASE_URL and other secrets: inject via ExternalSecret / sealed secret in your env
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi

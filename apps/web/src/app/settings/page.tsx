@@ -10,59 +10,50 @@
  * and database rows scoped to the tenant.
  */
 
-import { cookies } from "next/headers";
+import {
+  type GrowthosSettings,
+  readGrowthosSettings,
+  writeGrowthosSettings,
+} from "@/lib/settings-cookie";
 import { revalidatePath } from "next/cache";
-
-const SETTINGS_COOKIE = "growthos_settings";
-
-interface Settings {
-  openaiApiKey?: string;
-  logoUrl?: string;
-  primaryColor?: string;
-  autoApproveThreshold?: string;
-  enableBlogDraft?: boolean;
-  enableContentBrief?: boolean;
-  enableIntelBrief?: boolean;
-  digestEmail?: string;
-}
-
-async function loadSettings(): Promise<Settings> {
-  const jar = await cookies();
-  const raw = jar.get(SETTINGS_COOKIE)?.value;
-  if (!raw) return {};
-  try {
-    return JSON.parse(decodeURIComponent(raw)) as Settings;
-  } catch {
-    return {};
-  }
-}
 
 async function saveSettings(formData: FormData) {
   "use server";
-  const jar = await cookies();
-  const current = await loadSettings();
+  const current = await readGrowthosSettings();
   const newApiKey = (formData.get("openaiApiKey") as string | null)?.trim();
   const newLogoUrl = (formData.get("logoUrl") as string | null)?.trim();
-  const newPrimaryColor = (formData.get("primaryColor") as string | null) ?? undefined;
+  const newPrimaryColor =
+    (formData.get("primaryColor") as string | null) ?? undefined;
   const newDigestEmail = (formData.get("digestEmail") as string | null)?.trim();
 
-  const updated: Settings = {
+  const next: GrowthosSettings = {
     ...current,
-    autoApproveThreshold: (formData.get("autoApproveThreshold") as string | null) ?? "0",
+    autoApproveThreshold:
+      (formData.get("autoApproveThreshold") as string | null) ?? "0",
     enableBlogDraft: formData.get("enableBlogDraft") === "on",
     enableContentBrief: formData.get("enableContentBrief") === "on",
     enableIntelBrief: formData.get("enableIntelBrief") === "on",
-    ...(newApiKey ? { openaiApiKey: newApiKey } : current.openaiApiKey ? { openaiApiKey: current.openaiApiKey } : {}),
-    ...(newLogoUrl ? { logoUrl: newLogoUrl } : {}),
-    ...(newPrimaryColor ? { primaryColor: newPrimaryColor } : {}),
-    ...(newDigestEmail ? { digestEmail: newDigestEmail } : {}),
   };
-  jar.set(SETTINGS_COOKIE, encodeURIComponent(JSON.stringify(updated)), {
-    httpOnly: true,
-    sameSite: "lax",
-    maxAge: 60 * 60 * 24 * 90,
-    path: "/",
-  });
+
+  if (newApiKey) {
+    next.openaiApiKey = newApiKey;
+  } else if (current.openaiApiKey) {
+    next.openaiApiKey = current.openaiApiKey;
+  }
+
+  if (newLogoUrl) {
+    next.logoUrl = newLogoUrl;
+  }
+
+  if (newPrimaryColor) {
+    next.primaryColor = newPrimaryColor;
+  }
+
+  if (newDigestEmail) {
+    next.digestEmail = newDigestEmail;
+  }
+
+  await writeGrowthosSettings(next);
   revalidatePath("/settings");
 }
 
@@ -86,7 +77,7 @@ function FieldRow({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-sm font-medium text-gray-700">{label}</label>
+      <p className="text-sm font-medium text-gray-700">{label}</p>
       {children}
       {hint && <p className="text-xs text-gray-400">{hint}</p>}
     </div>
@@ -117,7 +108,7 @@ function Toggle({
 }
 
 export default async function SettingsPage() {
-  const settings = await loadSettings();
+  const settings = await readGrowthosSettings();
 
   const maskedKey = settings.openaiApiKey
     ? `sk-••••••••${settings.openaiApiKey.slice(-4)}`
@@ -126,7 +117,9 @@ export default async function SettingsPage() {
   return (
     <div className="mx-auto max-w-2xl py-8">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight text-gray-900">Settings</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-gray-900">
+          Settings
+        </h1>
         <p className="mt-1 text-sm text-gray-500">
           Configure integrations, brand context, and content preferences.
         </p>
@@ -168,6 +161,42 @@ export default async function SettingsPage() {
           </div>
         </section>
 
+        {/* ── Company profile (from onboarding) ───────────────────────── */}
+        {(settings.companyName || settings.onboardingCompletedAt) && (
+          <section className="rounded-xl border border-gray-200 bg-white p-6">
+            <SectionHeader
+              title="Company profile"
+              desc="Synced from onboarding. Re-run the wizard anytime from Setup."
+            />
+            <dl className="space-y-3 text-sm">
+              {settings.companyName && (
+                <div>
+                  <dt className="text-xs font-medium text-gray-500">Company</dt>
+                  <dd className="text-gray-900">{settings.companyName}</dd>
+                </div>
+              )}
+              {settings.icpDescription && (
+                <div>
+                  <dt className="text-xs font-medium text-gray-500">ICP</dt>
+                  <dd className="text-gray-700 leading-relaxed">
+                    {settings.icpDescription}
+                  </dd>
+                </div>
+              )}
+              {settings.positioning && (
+                <div>
+                  <dt className="text-xs font-medium text-gray-500">
+                    Positioning
+                  </dt>
+                  <dd className="text-gray-700 leading-relaxed">
+                    {settings.positioning}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </section>
+        )}
+
         {/* ── Brand assets ─────────────────────────────────────────────── */}
         <section className="rounded-xl border border-gray-200 bg-white p-6">
           <SectionHeader
@@ -185,7 +214,10 @@ export default async function SettingsPage() {
               />
             </FieldRow>
 
-            <FieldRow label="Primary brand color" hint="Used in content previews.">
+            <FieldRow
+              label="Primary brand color"
+              hint="Used in content previews."
+            >
               <div className="flex items-center gap-3">
                 <input
                   name="primaryColor"
@@ -215,9 +247,21 @@ export default async function SettingsPage() {
               <p className="text-sm font-medium text-gray-700 mb-2">
                 Enable content types
               </p>
-              <Toggle name="enableBlogDraft" label="Blog drafts" defaultChecked={settings.enableBlogDraft ?? true} />
-              <Toggle name="enableContentBrief" label="Content briefs" defaultChecked={settings.enableContentBrief ?? true} />
-              <Toggle name="enableIntelBrief" label="Intel briefs" defaultChecked={settings.enableIntelBrief ?? true} />
+              <Toggle
+                name="enableBlogDraft"
+                label="Blog drafts"
+                defaultChecked={settings.enableBlogDraft ?? true}
+              />
+              <Toggle
+                name="enableContentBrief"
+                label="Content briefs"
+                defaultChecked={settings.enableContentBrief ?? true}
+              />
+              <Toggle
+                name="enableIntelBrief"
+                label="Intel briefs"
+                defaultChecked={settings.enableIntelBrief ?? true}
+              />
             </div>
 
             <FieldRow

@@ -1,0 +1,15 @@
+{
+  "name": "growthos-infra",
+  "private": true,
+  "description": "Pulumi stub for GrowthOS cloud resources (optional; not part of pnpm workspace)",
+  "scripts": {
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@pulumi/pulumi": "^3.140.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.7.2"
+  }
+}
