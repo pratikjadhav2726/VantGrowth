@@ -19,6 +19,10 @@
  * touching the scoring math or the CritiqueWorker contract.
  */
 
+import {
+  type LlmCallRunner,
+  RUBRIC_CRITERION_EVALUATE_PROMPT,
+} from "@growthos/llm-harness";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -165,11 +169,94 @@ export const evaluateCriterion = (
     }
 
     default:
-      // Unknown checks pass to avoid false negatives; log for audit.
+      // Unknown checks pass to avoid false negatives in the sync path.
+      // Use evaluateCriterionWithLlm / evaluateRubricAsync for LLM-backed evaluation.
       return {
         passed: true,
-        details: `Unknown check "${check}" — auto-passed (pending LLM integration)`,
+        details: `Unknown check "${check}" — auto-passed (no LLM configured)`,
       };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Known check set — used to route to sync vs. async LLM evaluation
+// ---------------------------------------------------------------------------
+
+const KNOWN_CHECKS = new Set([
+  "has_cta",
+  "has_evidence",
+  "no_forbidden",
+  "length_ok",
+  "has_headings",
+  "has_hook",
+]);
+
+export const isKnownCheck = (check: string): boolean =>
+  KNOWN_CHECKS.has(check);
+
+// ---------------------------------------------------------------------------
+// Per-criterion LLM evaluator (for custom/unknown checks)
+// ---------------------------------------------------------------------------
+
+const criterionLlmResponseSchema = z.object({
+  passed: z.boolean(),
+  confidence: z.number().min(0).max(1).optional(),
+  explanation: z.string().optional(),
+});
+
+/**
+ * Evaluates a single rubric criterion using the LLM when the check type is not
+ * in the known deterministic set.  Falls back to auto-pass on any runner error,
+ * missing JSON, or schema validation failure to avoid false negatives.
+ */
+export const evaluateCriterionWithLlm = async (
+  criterion: RubricCriterion,
+  text: string,
+  runner: LlmCallRunner,
+): Promise<{ passed: boolean; details: string }> => {
+  let content: string;
+  try {
+    const result = await runner.run(RUBRIC_CRITERION_EVALUATE_PROMPT, {
+      criterionId: criterion.id,
+      criterionDescription: criterion.description,
+      candidateText: text,
+    });
+    content = result.content;
+  } catch {
+    return {
+      passed: true,
+      details: `LLM runner error — auto-passed for "${criterion.check}"`,
+    };
+  }
+
+  const match = content.match(/\{[\s\S]*\}/);
+  if (!match) {
+    return {
+      passed: true,
+      details: `LLM returned no JSON — auto-passed for "${criterion.check}"`,
+    };
+  }
+
+  try {
+    const parsed = criterionLlmResponseSchema.safeParse(JSON.parse(match[0]));
+    if (!parsed.success) {
+      return {
+        passed: true,
+        details: `LLM response schema invalid — auto-passed for "${criterion.check}"`,
+      };
+    }
+    const { passed, explanation } = parsed.data;
+    return {
+      passed,
+      details:
+        explanation ??
+        (passed ? "LLM: criterion satisfied" : "LLM: criterion not satisfied"),
+    };
+  } catch {
+    return {
+      passed: true,
+      details: `LLM JSON parse error — auto-passed for "${criterion.check}"`,
+    };
   }
 };
 
@@ -216,6 +303,90 @@ export const evaluateRubric = (
   });
 
   // Normalise weights to sum to 1 to be resilient to misconfigured playbooks.
+  const totalWeight = criteriaResults.reduce((s, c) => s + c.weight, 0);
+  const normalisedScore =
+    totalWeight > 0
+      ? criteriaResults.reduce(
+          (s, c) => s + (c.passed ? c.weight / totalWeight : 0),
+          0,
+        )
+      : 0;
+
+  const failedReasons = criteriaResults
+    .filter((c) => !c.passed)
+    .map((c) => `${c.description}: ${c.details}`);
+
+  return {
+    score: Math.min(1, Math.max(0, normalisedScore)),
+    criteriaResults,
+    reasons:
+      failedReasons.length > 0
+        ? failedReasons
+        : ["All rubric criteria passed."],
+  };
+};
+
+/**
+ * Async variant of evaluateRubric that delegates unknown criterion checks to
+ * the LLM runner when one is provided.  Known checks (has_cta, has_evidence,
+ * no_forbidden, length_ok, has_headings, has_hook) always run deterministically
+ * regardless of whether a runner is present — they are fast, free, and exact.
+ *
+ * Falls back to auto-pass for unknown checks when no runner is configured,
+ * preserving backward compatibility with the synchronous path.
+ */
+export const evaluateRubricAsync = async (
+  content: RubricPlaybookContent,
+  candidateText: string,
+  llmRunner?: LlmCallRunner,
+): Promise<RubricEvaluationResult> => {
+  const config: EvaluateConfig = {
+    ...(content.min_word_count !== undefined
+      ? { minWordCount: content.min_word_count }
+      : {}),
+    ...(content.max_word_count !== undefined
+      ? { maxWordCount: content.max_word_count }
+      : {}),
+    ...(content.forbidden_phrases !== undefined
+      ? { forbiddenPhrases: content.forbidden_phrases }
+      : {}),
+  };
+
+  const criteriaResults: CriterionResult[] = await Promise.all(
+    content.rubric.map(async (criterion): Promise<CriterionResult> => {
+      let passed: boolean;
+      let details: string;
+
+      if (isKnownCheck(criterion.check)) {
+        // Fast deterministic path — no LLM call needed.
+        ({ passed, details } = evaluateCriterion(
+          criterion.check,
+          candidateText,
+          config,
+        ));
+      } else if (llmRunner) {
+        // Custom check with LLM available — delegate.
+        ({ passed, details } = await evaluateCriterionWithLlm(
+          criterion,
+          candidateText,
+          llmRunner,
+        ));
+      } else {
+        // Custom check, no LLM — auto-pass.
+        passed = true;
+        details = `Unknown check "${criterion.check}" — auto-passed (no LLM configured)`;
+      }
+
+      return {
+        id: criterion.id,
+        passed,
+        weight: criterion.weight,
+        description: criterion.description,
+        details,
+      };
+    }),
+  );
+
   const totalWeight = criteriaResults.reduce((s, c) => s + c.weight, 0);
   const normalisedScore =
     totalWeight > 0

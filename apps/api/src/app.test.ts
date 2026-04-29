@@ -1283,3 +1283,151 @@ describe("GET /v1/motion", () => {
     expect(body.recentScores).toHaveLength(3);
   });
 });
+
+// ---------------------------------------------------------------------------
+// API token auth — mutation routes require Authorization: Bearer <token>
+// when GROWTHOS_API_SERVICE_TOKEN / apiServiceToken is configured.
+// ---------------------------------------------------------------------------
+
+describe("API token auth", () => {
+  const apiServiceToken = "test-service-token-abc123";
+
+  it("returns 401 on POST /v1/motions/score when no Authorization header", async () => {
+    const app = createApp({
+      apiServiceToken,
+      motionStackRepository: new InMemoryMotionStackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/motions/score", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(scoringBody),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 on POST /v1/motions/score with wrong token", async () => {
+    const app = createApp({
+      apiServiceToken,
+      motionStackRepository: new InMemoryMotionStackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/motions/score", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: "Bearer wrong-token",
+      },
+      body: JSON.stringify(scoringBody),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 201 on POST /v1/motions/score with correct token", async () => {
+    const app = createApp({
+      apiServiceToken,
+      motionStackRepository: new InMemoryMotionStackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/motions/score", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${apiServiceToken}`,
+      },
+      body: JSON.stringify(scoringBody),
+    });
+
+    expect(res.status).toBe(201);
+  });
+
+  it("returns 401 on POST /v1/approvals/decide when no Authorization header", async () => {
+    const app = createApp({
+      apiServiceToken,
+      approvalFeedbackRepository: new InMemoryApprovalFeedbackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/approvals/decide", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        issueId: "00000000-0000-4000-8000-000000000201",
+        outputType: "blog_draft.v1",
+        action: "approved",
+      }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 on POST /v1/signals when no Authorization header", async () => {
+    const app = createApp({
+      apiServiceToken,
+      signalEventsRepository: new InMemorySignalEventsRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({ signalType: "competitive", source: "twitter" }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 on POST /v1/signals/grade when no Authorization header", async () => {
+    const runner = new StubLlmCallRunner({ "signal.grade": "{}" });
+    const app = createApp({ apiServiceToken, llmCallRunner: runner });
+
+    const res = await app.request("http://localhost/v1/signals/grade", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({ signalType: "competitive", source: "twitter" }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /health is public even when apiServiceToken is configured", async () => {
+    const app = createApp({ apiServiceToken });
+    const res = await app.request("http://localhost/health");
+    expect(res.status).toBe(200);
+  });
+
+  it("GET /v1/motion is public even when apiServiceToken is configured", async () => {
+    const app = createApp({
+      apiServiceToken,
+      motionStackRepository: new InMemoryMotionStackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/motion", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("GET /v1/approvals is public even when apiServiceToken is configured", async () => {
+    const app = createApp({
+      apiServiceToken,
+      outboxRepository: new InMemoryOutboxRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/approvals", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+
+    expect(res.status).toBe(200);
+  });
+});

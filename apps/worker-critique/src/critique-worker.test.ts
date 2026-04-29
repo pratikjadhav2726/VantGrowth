@@ -13,7 +13,10 @@ import {
 import {
   artifactKindToPlaybookType,
   evaluateCriterion,
+  evaluateCriterionWithLlm,
   evaluateRubric,
+  evaluateRubricAsync,
+  isKnownCheck,
 } from "./playbook-rubric.js";
 
 // ---------------------------------------------------------------------------
@@ -714,6 +717,243 @@ describe("CritiqueWorker — LLM path", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.[1].verdict).toBe("approve");
     expect(events[0]?.[1].confidence_score).toBe(0.9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isKnownCheck
+// ---------------------------------------------------------------------------
+
+describe("isKnownCheck", () => {
+  it("returns true for all six deterministic check types", () => {
+    for (const check of [
+      "has_cta",
+      "has_evidence",
+      "no_forbidden",
+      "length_ok",
+      "has_headings",
+      "has_hook",
+    ]) {
+      expect(isKnownCheck(check)).toBe(true);
+    }
+  });
+
+  it("returns false for custom/unknown check types", () => {
+    expect(isKnownCheck("brand_voice")).toBe(false);
+    expect(isKnownCheck("technical_depth")).toBe(false);
+    expect(isKnownCheck("future_llm_check")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// evaluateCriterionWithLlm
+// ---------------------------------------------------------------------------
+
+const CRITERION_TEMPLATE_ID = "rubric.criterion.evaluate";
+
+const makeCustomCriterion = () => ({
+  id: "brand-voice",
+  weight: 0.5,
+  description: "Text adopts a confident, founder-voice tone",
+  check: "brand_voice",
+});
+
+describe("evaluateCriterionWithLlm", () => {
+  it("returns passed=true and LLM explanation for a passing response", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITERION_TEMPLATE_ID]: JSON.stringify({
+        passed: true,
+        confidence: 0.88,
+        explanation: "Tone is direct and confident.",
+      }),
+    });
+
+    const result = await evaluateCriterionWithLlm(
+      makeCustomCriterion(),
+      "We built this to solve a real problem we lived.",
+      runner,
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.details).toBe("Tone is direct and confident.");
+  });
+
+  it("returns passed=false when LLM judges criterion not met", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITERION_TEMPLATE_ID]: JSON.stringify({
+        passed: false,
+        confidence: 0.75,
+        explanation: "Text reads as corporate boilerplate.",
+      }),
+    });
+
+    const result = await evaluateCriterionWithLlm(
+      makeCustomCriterion(),
+      "Our industry-leading solution drives synergy.",
+      runner,
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.details).toContain("corporate boilerplate");
+  });
+
+  it("auto-passes when LLM response contains no JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITERION_TEMPLATE_ID]: "I cannot evaluate this criterion.",
+    });
+
+    const result = await evaluateCriterionWithLlm(
+      makeCustomCriterion(),
+      "Some text.",
+      runner,
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.details).toContain("auto-passed");
+  });
+
+  it("auto-passes when the runner throws", async () => {
+    const runner = new StubLlmCallRunner({});
+    vi.spyOn(runner, "run").mockRejectedValueOnce(new Error("LLM unavailable"));
+
+    const result = await evaluateCriterionWithLlm(
+      makeCustomCriterion(),
+      "Some text.",
+      runner,
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.details).toContain("auto-passed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// evaluateRubricAsync
+// ---------------------------------------------------------------------------
+
+describe("evaluateRubricAsync", () => {
+  it("evaluates known checks without calling the LLM", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITERION_TEMPLATE_ID]: JSON.stringify({ passed: true }),
+    });
+    const rubric = makeRubric(); // all known checks
+
+    await evaluateRubricAsync(rubric, richOutput, runner);
+
+    // No LLM calls should have been made — all checks are deterministic.
+    expect(runner.callHistory).toHaveLength(0);
+  });
+
+  it("calls LLM for custom checks when runner is provided", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITERION_TEMPLATE_ID]: JSON.stringify({
+        passed: true,
+        explanation: "Brand voice detected.",
+      }),
+    });
+    const rubric = {
+      rubric: [
+        {
+          id: "brand-voice",
+          weight: 1,
+          description: "Founder voice tone",
+          check: "brand_voice", // unknown check
+        },
+      ],
+    };
+
+    const result = await evaluateRubricAsync(rubric, richOutput, runner);
+
+    expect(runner.callHistory).toHaveLength(1);
+    expect(runner.callHistory[0]?.templateId).toBe(CRITERION_TEMPLATE_ID);
+    expect(result.score).toBe(1);
+    expect(result.criteriaResults[0]?.passed).toBe(true);
+  });
+
+  it("auto-passes custom checks when no LLM runner is provided", async () => {
+    const rubric = {
+      rubric: [
+        {
+          id: "technical-depth",
+          weight: 1,
+          description: "Appropriate technical depth for ICP",
+          check: "technical_depth",
+        },
+      ],
+    };
+
+    const result = await evaluateRubricAsync(rubric, "Some content.", undefined);
+
+    expect(result.score).toBe(1);
+    expect(result.criteriaResults[0]?.details).toContain("auto-passed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CritiqueWorker — custom rubric criterion via LLM
+// ---------------------------------------------------------------------------
+
+describe("CritiqueWorker — custom rubric criterion via LLM", () => {
+  it("delegates custom rubric check to LLM runner inside scoreWithPlaybook", async () => {
+    const runner = new StubLlmCallRunner({
+      // High-confidence approve from the top-level LLM critique path
+      [CRITIQUE_TEMPLATE_ID]: VALID_LLM_VERDICT_JSON,
+      // Criterion-level LLM response for the custom check
+      [CRITERION_TEMPLATE_ID]: JSON.stringify({
+        passed: false,
+        explanation: "Text lacks founder voice.",
+      }),
+    });
+
+    // Wire the runner to return no JSON for the top-level critique so it falls
+    // through to the playbook path, which then calls the criterion LLM.
+    const noOpRunner = new StubLlmCallRunner({
+      [CRITIQUE_TEMPLATE_ID]: "Cannot evaluate.",
+      [CRITERION_TEMPLATE_ID]: JSON.stringify({
+        passed: false,
+        explanation: "Missing founder perspective.",
+      }),
+    });
+
+    const playbookRepository = new InMemoryPlaybookVersionsRepository();
+    await playbookRepository.create(TENANT_ID, {
+      playbookType: "blog_draft",
+      name: "Brand voice playbook",
+      content: {
+        rubric: [
+          {
+            id: "brand-voice",
+            weight: 1,
+            description: "Founder-voice tone throughout",
+            check: "brand_voice",
+          },
+        ],
+      },
+      createdBy: "test",
+    });
+
+    const outbox = new InMemoryOutboxRepository();
+    const worker = new CritiqueWorker({
+      outboxRepository: outbox,
+      eventPublisher: { publish: vi.fn(async () => undefined) },
+      llmCallRunner: noOpRunner,
+      playbookRepository,
+    });
+
+    const result = await worker.critique({
+      ...baseRequest,
+      candidateOutput:
+        "Our synergistic platform leverages best-in-class paradigms.",
+    });
+
+    // Playbook: brand_voice fails (LLM says so) → score 0 → reject
+    expect(result.verdict).toBe("reject");
+    // Criterion LLM was called
+    expect(
+      noOpRunner.callHistory.some(
+        (c) => c.templateId === CRITERION_TEMPLATE_ID,
+      ),
+    ).toBe(true);
   });
 });
 

@@ -40,7 +40,7 @@ import {
 import {
   type RubricEvaluationResult,
   artifactKindToPlaybookType,
-  evaluateRubric,
+  evaluateRubricAsync,
   rubricPlaybookContentSchema,
 } from "./playbook-rubric.js";
 
@@ -278,7 +278,13 @@ export class CritiqueWorker {
     const parsed = rubricPlaybookContentSchema.safeParse(playbook.content);
     if (!parsed.success) return null;
 
-    const rubricResult = evaluateRubric(parsed.data, request.candidateOutput);
+    // Pass the LLM runner through so custom rubric criteria can be evaluated
+    // by the model rather than auto-passing.  Known checks remain deterministic.
+    const rubricResult = await evaluateRubricAsync(
+      parsed.data,
+      request.candidateOutput,
+      this.deps.llmCallRunner,
+    );
     return scoreWithRubric(rubricResult);
   }
 }

@@ -26,6 +26,7 @@ import {
   getTracer,
 } from "@growthos/observability";
 import { Hono } from "hono";
+import { createApiTokenMiddleware } from "./auth-middleware.js";
 import { mapErrorToResponse } from "./error-middleware.js";
 import { createApprovalRoutes } from "./routes/approvals.js";
 import { createCommandRoutes } from "./routes/commands.js";
@@ -52,6 +53,12 @@ export interface AppDependencies {
    * tests to force unconfigured behaviour.
    */
   llmCallRunner?: LlmCallRunner | null;
+  /**
+   * When set, all mutation routes enforce `Authorization: Bearer <token>`.
+   * When null/undefined, the API runs in permissive mode (dev/CI default).
+   * Resolved from `GROWTHOS_API_SERVICE_TOKEN` env when not injected.
+   */
+  apiServiceToken?: string | null;
 }
 
 const resolvePaperclipClient = (
@@ -151,6 +158,27 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
   );
 
   app.onError((error, c) => mapErrorToResponse(error, c));
+
+  // ── API token auth on all mutation routes ─────────────────────────────────
+  // GET /health, GET /v1/motion, GET /v1/approvals remain public.
+  // POST /v1/workflows/runtime-callbacks/* uses HMAC (handled inside the route).
+  // When GROWTHOS_API_SERVICE_TOKEN is unset (or apiServiceToken is null) the
+  // middleware is permissive — existing tests and local dev work unchanged.
+  const apiToken =
+    deps.apiServiceToken !== undefined
+      ? deps.apiServiceToken
+      : (process.env.GROWTHOS_API_SERVICE_TOKEN ?? null);
+  const requireToken = createApiTokenMiddleware({ serviceToken: apiToken });
+
+  app.use("/v1/motions/*", requireToken);
+  app.use("/v1/approvals/decide", requireToken);
+  // Both exact and wildcard are needed: /v1/signals (POST /) and /v1/signals/* (POST /grade).
+  app.use("/v1/signals", requireToken);
+  app.use("/v1/signals/*", requireToken);
+  app.use("/v1/commands/*", requireToken);
+  app.use("/v1/paperclip/*", requireToken);
+  app.use("/v1/workflows/hello", requireToken);
+  app.use("/v1/workflows/tenant-provisioning", requireToken);
 
   app.get("/health", (c) =>
     c.json({

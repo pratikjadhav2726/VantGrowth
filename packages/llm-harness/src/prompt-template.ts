@@ -275,3 +275,39 @@ export const CRITIQUE_EVALUATE_PROMPT = definePrompt<{
   render: ({ artifactKind, candidateOutput, rubricCriteria }) =>
     `Evaluate this ${artifactKind} against the rubric:\n\nRubric: ${rubricCriteria}\n\nCandidate:\n${candidateOutput}\n\nRespond with: verdict (approve/revise/reject), confidence_score (0-1), and reasons array.`,
 });
+
+/**
+ * RUBRIC_CRITERION_EVALUATE_PROMPT
+ *
+ * Evaluates a single rubric criterion against a candidate text.  Used for
+ * custom/unknown checks that cannot be evaluated deterministically.  The caller
+ * is responsible for parsing the JSON response and falling back gracefully on
+ * failure.
+ */
+export const RUBRIC_CRITERION_EVALUATE_PROMPT = definePrompt<{
+  criterionId: string;
+  criterionDescription: string;
+  candidateText: string;
+}>({
+  id: "rubric.criterion.evaluate",
+  version: "1.0.0",
+  system:
+    "You are a content quality auditor. " +
+    "Determine whether the provided text satisfies a specific rubric criterion. " +
+    "Return ONLY valid JSON — no markdown fences, no commentary.",
+  render: ({ criterionId, criterionDescription, candidateText }) =>
+    `Does the following text satisfy this criterion?
+
+Criterion ID: ${criterionId}
+Criterion: ${criterionDescription}
+
+Text (first 3000 chars):
+${candidateText.slice(0, 3000)}
+
+Respond with JSON:
+{
+  "passed": true or false,
+  "confidence": 0.0 to 1.0,
+  "explanation": "<one sentence>"
+}`,
+});
