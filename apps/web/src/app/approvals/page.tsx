@@ -10,6 +10,7 @@
  */
 
 import { EmptyState } from "@/components/empty-state";
+import { ApprovalKeyboardNav } from "@/components/approval-keyboard-nav";
 import { StatusBadge } from "@/components/status-badge";
 import { listApprovals, submitApprovalDecision } from "@/lib/api-client";
 import { revalidatePath } from "next/cache";
@@ -173,6 +174,7 @@ export default async function ApprovalsPage({
 
       {/* ── Draft cards ─────────────────────────────────────────────── */}
       {items.length > 0 && (
+        <ApprovalKeyboardNav itemCount={items.length}>
         <ul className="space-y-4">
           {items.map((item) => {
             const draft = item.payload as BlogDraftPayload;
@@ -181,7 +183,10 @@ export default async function ApprovalsPage({
             return (
               <li
                 key={item.eventId}
-                className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md"
+                // biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard nav target
+                tabIndex={0}
+                data-approval-item
+                className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1"
               >
                 {/* Card header */}
                 <div className="flex items-start justify-between gap-4">
@@ -334,6 +339,7 @@ export default async function ApprovalsPage({
             );
           })}
         </ul>
+        </ApprovalKeyboardNav>
       )}
     </div>
   );

@@ -14,6 +14,7 @@ const navItems = [
   { href: "/motion", label: "Motion" },
   { href: "/signals", label: "Signals" },
   { href: "/weekly-review", label: "Weekly Review" },
+  { href: "/settings", label: "Settings" },
 ];
 
 export default async function RootLayout({

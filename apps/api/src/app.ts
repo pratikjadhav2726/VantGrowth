@@ -30,6 +30,7 @@ import { createApiTokenMiddleware } from "./auth-middleware.js";
 import { mapErrorToResponse } from "./error-middleware.js";
 import { createApprovalRoutes } from "./routes/approvals.js";
 import { createCommandRoutes } from "./routes/commands.js";
+import { createDigestRoutes } from "./routes/digest.js";
 import { createMotionRoutes } from "./routes/motion.js";
 import { createMotionsRoutes } from "./routes/motions.js";
 import { createPaperclipRoutes } from "./routes/paperclip.js";
@@ -228,6 +229,14 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
   app.route(
     "/v1/motion",
     createMotionRoutes({
+      motionStackRepository: resolveMotionStackRepository(deps),
+    }),
+  );
+  app.route(
+    "/v1/digest",
+    createDigestRoutes({
+      approvalFeedbackRepository: resolveApprovalFeedbackRepository(deps),
+      outboxRepository: resolveOutboxRepository(deps),
       motionStackRepository: resolveMotionStackRepository(deps),
     }),
   );

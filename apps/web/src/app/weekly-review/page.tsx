@@ -14,7 +14,9 @@
 
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
+import { DigestTrigger } from "@/components/digest-trigger";
 import { getMotionOverview, listApprovals } from "@/lib/api-client";
+import { cookies } from "next/headers";
 
 const DEV_TENANT_ID =
   process.env.GROWTHOS_DEV_TENANT_ID ?? "00000000-0000-0000-0001-000000000001";
@@ -33,12 +35,29 @@ const weekRange = () => {
   return { start, end };
 };
 
+const SETTINGS_COOKIE = "growthos_settings";
+
+const getDigestRecipientEmail = async (): Promise<string | undefined> => {
+  const jar = await cookies();
+  const raw = jar.get(SETTINGS_COOKIE)?.value;
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(decodeURIComponent(raw)) as {
+      digestEmail?: string;
+    };
+    return parsed.digestEmail?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
 export default async function WeeklyReviewPage() {
   const { start, end } = weekRange();
+  const digestRecipientEmail = await getDigestRecipientEmail();
 
   // Fetch data in parallel — degrade gracefully on error.
   const [pendingDrafts, pendingBriefs, motionData] = await Promise.allSettled([
@@ -76,9 +95,15 @@ export default async function WeeklyReviewPage() {
             {fmt(start)} — {fmt(end)} · Founder GTM cadence snapshot
           </p>
         </div>
-        <span className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 ring-1 ring-inset ring-brand-200">
-          Week of {fmt(start)}
-        </span>
+        <div className="flex flex-col items-end gap-2">
+          <span className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 ring-1 ring-inset ring-brand-200">
+            Week of {fmt(start)}
+          </span>
+          <DigestTrigger
+            tenantId={DEV_TENANT_ID}
+            {...(digestRecipientEmail ? { recipientEmail: digestRecipientEmail } : {})}
+          />
+        </div>
       </div>
 
       {/* ── Summary stats row ────────────────────────────────────────── */}

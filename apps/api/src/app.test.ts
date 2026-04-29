@@ -1431,3 +1431,202 @@ describe("API token auth", () => {
     expect(res.status).toBe(200);
   });
 });
+
+// ---------------------------------------------------------------------------
+// /v1/digest
+// ---------------------------------------------------------------------------
+
+describe("/v1/digest", () => {
+  it("GET /v1/digest/weekly returns computed weekly metrics", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    const outboxRepository = new InMemoryOutboxRepository();
+    const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
+
+    // Seed motion score + stack
+    await motionStackRepository.recordScore({
+      tenantId,
+      scorerVersion: "motion_scorer.v1",
+      scores: { inbound_content: 0.8, product_led: 0.7 },
+      inputsDigest: "digest-seed",
+      rationale: ["seed"],
+    });
+    motionStackRepository.seedStack({
+      id: "00000000-0000-4000-8000-000000000777",
+      tenantId,
+      primaryMotions: ["inbound_content"],
+      secondaryMotions: ["product_led"],
+      observeOnly: [],
+      deactivated: [],
+      version: "1",
+      createdAt: new Date(),
+    });
+
+    // Seed pending outbox approval item
+    await outboxRepository.enqueue({
+      tenantId,
+      eventType: "blog_draft.v1",
+      idempotencyKey: "digest-pending-1",
+      payload: { draft_id: "d-1", title: "Draft 1" },
+    });
+
+    // Seed one approved and one rejected decision
+    await approvalFeedbackRepository.record({
+      tenantId,
+      issueId: "00000000-0000-4000-8000-000000000901",
+      outputType: "blog_draft.v1",
+      action: "approved",
+      learnOptIn: true,
+    });
+    await approvalFeedbackRepository.record({
+      tenantId,
+      issueId: "00000000-0000-4000-8000-000000000902",
+      outputType: "blog_draft.v1",
+      action: "rejected",
+      learnOptIn: true,
+    });
+
+    const app = createApp({
+      motionStackRepository,
+      outboxRepository,
+      approvalFeedbackRepository,
+    });
+
+    const res = await app.request("http://localhost/v1/digest/weekly", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as {
+      approvals: { approved: number; rejected: number; pending: number };
+      motionStack: { primaryMotions: string[]; topMotion: string | null };
+      signalCount: number;
+    };
+    expect(body.approvals.approved).toBe(1);
+    expect(body.approvals.rejected).toBe(1);
+    expect(body.approvals.pending).toBe(1);
+    expect(body.motionStack.primaryMotions).toEqual(["inbound_content"]);
+    expect(body.motionStack.topMotion).toBe("inbound_content");
+    expect(body.signalCount).toBe(0);
+  });
+
+  it("POST /v1/digest/send returns sent=false when Postal is not configured", async () => {
+    const app = createApp({
+      motionStackRepository: new InMemoryMotionStackRepository(),
+      outboxRepository: new InMemoryOutboxRepository(),
+      approvalFeedbackRepository: new InMemoryApprovalFeedbackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/digest/send", {
+      method: "POST",
+      headers: { "X-Tenant-Id": tenantId, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sent: boolean; reason?: string };
+    expect(body.sent).toBe(false);
+    expect(body.reason).toBe("postal_not_configured");
+  });
+
+  it("POST /v1/digest/send accepts recipientEmail override", async () => {
+    const app = createApp({
+      motionStackRepository: new InMemoryMotionStackRepository(),
+      outboxRepository: new InMemoryOutboxRepository(),
+      approvalFeedbackRepository: new InMemoryApprovalFeedbackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/digest/send", {
+      method: "POST",
+      headers: { "X-Tenant-Id": tenantId, "content-type": "application/json" },
+      body: JSON.stringify({ recipientEmail: "founder@example.com" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sent: boolean; reason?: string };
+    expect(body.sent).toBe(false);
+    expect(body.reason).toBe("postal_not_configured");
+  });
+
+  it("POST /v1/digest/send rejects invalid recipientEmail", async () => {
+    const app = createApp({
+      motionStackRepository: new InMemoryMotionStackRepository(),
+      outboxRepository: new InMemoryOutboxRepository(),
+      approvalFeedbackRepository: new InMemoryApprovalFeedbackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/digest/send", {
+      method: "POST",
+      headers: { "X-Tenant-Id": tenantId, "content-type": "application/json" },
+      body: JSON.stringify({ recipientEmail: "invalid-email" }),
+    });
+
+    expect(res.status).toBe(422);
+  });
+
+  it("POST /v1/digest/send reports sent=true when Postal accepts request", async () => {
+    vi.stubEnv("POSTAL_API_KEY", "postal-test-key");
+    vi.stubEnv("POSTAL_SERVER_URL", "https://postal.example.com");
+    vi.stubEnv("GROWTHOS_DIGEST_RECIPIENT_EMAIL", "digest@example.com");
+
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("ok", { status: 200 }));
+
+    const app = createApp({
+      motionStackRepository: new InMemoryMotionStackRepository(),
+      outboxRepository: new InMemoryOutboxRepository(),
+      approvalFeedbackRepository: new InMemoryApprovalFeedbackRepository(),
+    });
+
+    try {
+      const res = await app.request("http://localhost/v1/digest/send", {
+        method: "POST",
+        headers: { "X-Tenant-Id": tenantId, "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { sent: boolean; reason?: string };
+      expect(body.sent).toBe(true);
+      expect(body.reason).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("POST /v1/digest/send retries on transient Postal failures", async () => {
+    vi.stubEnv("POSTAL_API_KEY", "postal-test-key");
+    vi.stubEnv("POSTAL_SERVER_URL", "https://postal.example.com");
+    vi.stubEnv("GROWTHOS_DIGEST_RECIPIENT_EMAIL", "digest@example.com");
+    vi.stubEnv("GROWTHOS_POSTAL_RETRY_DELAY_MS", "1");
+
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("temporary", { status: 503 }))
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const app = createApp({
+      motionStackRepository: new InMemoryMotionStackRepository(),
+      outboxRepository: new InMemoryOutboxRepository(),
+      approvalFeedbackRepository: new InMemoryApprovalFeedbackRepository(),
+    });
+
+    try {
+      const res = await app.request("http://localhost/v1/digest/send", {
+        method: "POST",
+        headers: { "X-Tenant-Id": tenantId, "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { sent: boolean; reason?: string };
+      expect(body.sent).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+});

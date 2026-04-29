@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm --filter @growthos/core test)",
+      "Bash(pnpm --filter @growthos/core typecheck)",
+      "Bash(pnpm install *)",
+      "Bash(pnpm --filter @growthos/worker-workflow-callback test)",
+      "Bash(pnpm --filter @growthos/worker-workflow-callback typecheck)",
+      "Bash(git -C /Users/pratik/Documents/GTM status --short)",
+      "Bash(git -C /Users/pratik/Documents/GTM add packages/identity/ packages/billing/ packages/core/package.json packages/core/src/tenant-provisioning.ts packages/core/src/tenant-provisioning.test.ts apps/worker-workflow-callback/package.json apps/worker-workflow-callback/src/workflow-callback-worker.ts apps/worker-workflow-callback/src/workflow-callback-worker.test.ts apps/worker-workflow-callback/src/index.ts pnpm-lock.yaml)",
+      "Bash(git -C /Users/pratik/Documents/GTM commit -m ' *)",
+      "Bash(git -C /Users/pratik/Documents/GTM add Growthos_v4_Implementation_Plan.md)",
+      "Bash(pnpm --filter @growthos/web typecheck)"
+    ]
+  }
+}

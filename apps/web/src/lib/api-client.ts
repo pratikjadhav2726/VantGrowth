@@ -255,3 +255,49 @@ export const ingestSignal = (
     body: JSON.stringify(signal),
     schema: ingestSignalResponseSchema,
   });
+
+// ---------------------------------------------------------------------------
+// Founder digest
+// ---------------------------------------------------------------------------
+
+export const weeklyMetricsSchema = z.object({
+  tenantId: z.string(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  approvals: z.object({
+    approved: z.number(),
+    rejected: z.number(),
+    pending: z.number(),
+  }),
+  motionStack: z.object({
+    primaryMotions: z.array(z.string()),
+    topMotion: z.string().nullable(),
+  }),
+  signalCount: z.number(),
+  generatedAt: z.string(),
+});
+export type WeeklyMetrics = z.infer<typeof weeklyMetricsSchema>;
+
+export const sendDigestResponseSchema = z.object({
+  sent: z.boolean(),
+  digestId: z.string(),
+  tenantId: z.string(),
+  reason: z.string().optional(),
+  metrics: weeklyMetricsSchema,
+});
+export type SendDigestResponse = z.infer<typeof sendDigestResponseSchema>;
+
+export const getWeeklyDigest = (tenantId: string) =>
+  apiFetch("/v1/digest/weekly", tenantId, { schema: weeklyMetricsSchema });
+
+export const sendFounderDigest = (
+  tenantId: string,
+  options?: { recipientEmail?: string },
+) =>
+  apiFetch("/v1/digest/send", tenantId, {
+    method: "POST",
+    body: JSON.stringify({
+      ...(options?.recipientEmail ? { recipientEmail: options.recipientEmail } : {}),
+    }),
+    schema: sendDigestResponseSchema,
+  });
