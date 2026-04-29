@@ -34,6 +34,7 @@ import {
 } from "@growthos/core";
 import type { OutboxRepository, WorkflowRunRepository } from "@growthos/db";
 import { tenantScopedSubject } from "@growthos/db";
+import type { TenantSecretsService } from "@growthos/secrets";
 import { OutboxProvisioningProgressReporter } from "./outbox-progress-reporter.js";
 
 export interface EventPublisher {
@@ -66,6 +67,17 @@ export interface WorkflowCallbackWorkerDependencies {
    * with a request-scoped OutboxProvisioningProgressReporter.
    */
   provisioningClients?: ProvisioningClients;
+  /**
+   * Optional: when provided, the worker writes well-known tenant secrets
+   * (openai_api_key, nats_credentials, etc.) to the secrets store immediately
+   * after the 5 provisioning steps complete.  Secrets are sourced from
+   * matching environment variables so the provisioning flow is fully
+   * automated in CI without manual Vault writes.
+   *
+   * In production replace the env-backed SecretManager with VaultSecretManager
+   * by setting VAULT_ADDR + VAULT_TOKEN.
+   */
+  tenantSecretsService?: TenantSecretsService;
 }
 
 export class WorkflowCallbackWorker {
@@ -125,6 +137,21 @@ export class WorkflowCallbackWorker {
 
     try {
       const result = await orchestrator.run(request);
+
+      // ── Step 6 (optional): write well-known secrets to the secrets store ──
+      // Sources from matching env vars; silently skips missing vars.  This
+      // step is idempotent: re-provisioning the same tenant overwrites
+      // existing secrets with the current env values.
+      if (this.deps.tenantSecretsService) {
+        await this.deps.tenantSecretsService.provisionTenant(request.tenantId, {
+          openai_api_key: process.env.TENANT_OPENAI_API_KEY ?? "",
+          paperclip_api_token: process.env.PAPERCLIP_SERVICE_TOKEN ?? "",
+          gitea_token: process.env.GITEA_SERVICE_TOKEN ?? "",
+          minio_access_key: process.env.MINIO_ACCESS_KEY ?? "",
+          minio_secret_key: process.env.MINIO_SECRET_KEY ?? "",
+          nats_credentials: process.env.NATS_CREDENTIALS ?? "",
+        });
+      }
 
       const callbackId = `orchestrator:${request.workflowId}:completed`;
       const completedCommand = createTenantProvisioningCompletedOutboxCommand({

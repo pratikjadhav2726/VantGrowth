@@ -3,9 +3,7 @@ import { PaperclipClient, paperclipConfigFromEnv } from "@growthos/adapter";
 import {
   RestateHttpWorkflowClient,
   type RestateWorkflowClientPort,
-  motionScoringInputSchema,
   restateConfigFromEnv,
-  scoreMotions,
 } from "@growthos/core";
 import {
   type ApprovalFeedbackRepository,
@@ -31,6 +29,7 @@ import { mapErrorToResponse } from "./error-middleware.js";
 import { createApprovalRoutes } from "./routes/approvals.js";
 import { createCommandRoutes } from "./routes/commands.js";
 import { createMotionRoutes } from "./routes/motion.js";
+import { createMotionsRoutes } from "./routes/motions.js";
 import { createPaperclipRoutes } from "./routes/paperclip.js";
 import { createSignalRoutes } from "./routes/signals.js";
 import { createWorkflowRoutes } from "./routes/workflows.js";
@@ -144,12 +143,12 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
     }),
   );
 
-  app.post("/v1/motions/score", async (c) => {
-    const payload = motionScoringInputSchema.parse(await c.req.json());
-    const result = scoreMotions(payload);
-    return c.json(result, 202);
-  });
-
+  app.route(
+    "/v1/motions",
+    createMotionsRoutes({
+      motionStackRepository: resolveMotionStackRepository(deps),
+    }),
+  );
   app.route(
     "/v1/commands",
     createCommandRoutes({ outboxRepository: resolveOutboxRepository(deps) }),

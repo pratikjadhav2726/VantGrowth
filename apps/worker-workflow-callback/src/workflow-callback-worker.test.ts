@@ -9,6 +9,7 @@ import {
   InMemoryOutboxRepository,
   InMemoryWorkflowRunRepository,
 } from "@growthos/db";
+import { EnvSecretManager, TenantSecretsService } from "@growthos/secrets";
 import { describe, expect, it, vi } from "vitest";
 import {
   type EventPublisher,
@@ -342,5 +343,97 @@ describe("WorkflowCallbackWorker — orchestrator path", () => {
       "wf-orch-fail",
     );
     expect(run?.state).toBe("failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Secrets provisioning step
+// ---------------------------------------------------------------------------
+
+describe("WorkflowCallbackWorker — secrets provisioning", () => {
+  const secretsRequest = {
+    tenantId,
+    workflowId: "wf-secrets-1",
+    dedupeKey: "wf-secrets-1",
+    tenantExternalId: "ten_sec_01",
+    tenantName: "SecretsCo",
+    requestedBy: "founder",
+  };
+
+  it("writes TENANT_OPENAI_API_KEY to the secrets store after provisioning", async () => {
+    const env: Record<string, string> = {
+      TENANT_OPENAI_API_KEY: "sk-test-key-from-env",
+    };
+    const manager = new EnvSecretManager(env);
+    const tenantSecretsService = new TenantSecretsService(manager);
+
+    const outbox = new InMemoryOutboxRepository();
+    const wfRuns = new InMemoryWorkflowRunRepository();
+    const publisher: EventPublisher = { publish: vi.fn(async () => undefined) };
+
+    // Set env vars before running so the worker picks them up.
+    const originalEnv = process.env.TENANT_OPENAI_API_KEY;
+    process.env.TENANT_OPENAI_API_KEY = "sk-test-key-from-env";
+
+    const worker = new WorkflowCallbackWorker({
+      outboxRepository: outbox,
+      workflowRunRepository: wfRuns,
+      eventPublisher: publisher,
+      runtimeStateVerifier: {
+        getTenantProvisioningRuntimeState: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+      provisioningClients: {
+        paperclip: new StubPaperclipProvisioningClient(),
+        gitea: new StubGiteaProvisioningClient(),
+        nats: new StubNatsProvisioningClient(),
+        minio: new StubMinioProvisioningClient(),
+      },
+      tenantSecretsService,
+    });
+
+    const result =
+      await worker.processTenantProvisioningCompletion(secretsRequest);
+
+    process.env.TENANT_OPENAI_API_KEY = originalEnv;
+
+    expect(result.state).toBe("completed");
+
+    const stored = await tenantSecretsService.get(tenantId, "openai_api_key");
+    expect(stored).toBe("sk-test-key-from-env");
+  });
+
+  it("does not call provisionTenant when tenantSecretsService is omitted", async () => {
+    const outbox = new InMemoryOutboxRepository();
+    const wfRuns = new InMemoryWorkflowRunRepository();
+    const publisher: EventPublisher = { publish: vi.fn(async () => undefined) };
+
+    const worker = new WorkflowCallbackWorker({
+      outboxRepository: outbox,
+      workflowRunRepository: wfRuns,
+      eventPublisher: publisher,
+      runtimeStateVerifier: {
+        getTenantProvisioningRuntimeState: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+      provisioningClients: {
+        paperclip: new StubPaperclipProvisioningClient(),
+        gitea: new StubGiteaProvisioningClient(),
+        nats: new StubNatsProvisioningClient(),
+        minio: new StubMinioProvisioningClient(),
+      },
+      // tenantSecretsService intentionally omitted
+    });
+
+    // Should complete without error even without a secrets service.
+    const result = await worker.processTenantProvisioningCompletion({
+      ...secretsRequest,
+      workflowId: "wf-no-secrets",
+      dedupeKey: "wf-no-secrets",
+    });
+
+    expect(result.state).toBe("completed");
   });
 });

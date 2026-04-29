@@ -188,6 +188,9 @@ importers:
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@growthos/llm-harness':
+        specifier: workspace:*
+        version: link:../../packages/llm-harness
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -326,6 +329,9 @@ importers:
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@growthos/secrets':
+        specifier: workspace:*
+        version: link:../../packages/secrets
       nats:
         specifier: ^2.29.3
         version: 2.29.3

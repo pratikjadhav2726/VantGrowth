@@ -439,6 +439,57 @@ describe("OpenAiLlmCallRunner tenantId context forwarding", () => {
 // registerModelPricing
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// OpenAiLlmCallRunner.fromSecrets
+// ---------------------------------------------------------------------------
+
+describe("OpenAiLlmCallRunner.fromSecrets", () => {
+  it("resolves API key from secretReader and constructs a runner", async () => {
+    const secretReader = {
+      get: vi.fn(async (path: string) =>
+        path === "tenants/ten-1/openai_api_key" ? "sk-from-vault" : null,
+      ),
+    };
+
+    // We can't call the real OpenAI API, but we can verify the runner is created
+    // without error when a key is resolved from the secret reader.
+    const runner = await OpenAiLlmCallRunner.fromSecrets(
+      secretReader,
+      "ten-1",
+      { defaultModel: "gpt-4o-mini" },
+    );
+
+    expect(runner).toBeInstanceOf(OpenAiLlmCallRunner);
+    expect(secretReader.get).toHaveBeenCalledWith(
+      "tenants/ten-1/openai_api_key",
+    );
+  });
+
+  it("falls back to OPENAI_API_KEY env when secret is null", async () => {
+    const secretReader = { get: vi.fn(async () => null) };
+
+    const original = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-from-env-fallback";
+
+    const runner = await OpenAiLlmCallRunner.fromSecrets(secretReader, "ten-1");
+    expect(runner).toBeInstanceOf(OpenAiLlmCallRunner);
+
+    process.env.OPENAI_API_KEY = original;
+  });
+
+  it("throws when neither secret nor env provides a key", async () => {
+    const secretReader = { get: vi.fn(async () => null) };
+
+    vi.stubEnv("OPENAI_API_KEY", "");
+
+    await expect(
+      OpenAiLlmCallRunner.fromSecrets(secretReader, "ten-1"),
+    ).rejects.toThrow("OpenAI API key not found");
+
+    vi.unstubAllEnvs();
+  });
+});
+
 describe("registerModelPricing", () => {
   afterEach(() => {
     // No cleanup needed — map is module-level but tests don't conflict

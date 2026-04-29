@@ -14,6 +14,11 @@ import {
   createDbFromEnv,
 } from "@growthos/db";
 import { createLogger, initOtelSdk } from "@growthos/observability";
+import {
+  EnvSecretManager,
+  TenantSecretsService,
+  VaultSecretManager,
+} from "@growthos/secrets";
 import { JSONCodec, connect } from "nats";
 import { NatsJetStreamPublisher } from "./nats-publisher.js";
 import type { ProvisioningClients } from "./workflow-callback-worker.js";
@@ -57,6 +62,29 @@ const resolveProvisioningClients = (): ProvisioningClients | undefined => {
   };
 };
 
+/**
+ * Resolve the secrets service from environment.
+ *
+ * When VAULT_ADDR and VAULT_TOKEN are both set, uses VaultSecretManager
+ * (production).  Otherwise uses EnvSecretManager (dev / CI).
+ */
+const resolveSecretsService = (): TenantSecretsService => {
+  const vaultAddr = process.env.VAULT_ADDR;
+  const vaultToken = process.env.VAULT_TOKEN;
+
+  if (vaultAddr && vaultToken) {
+    log.info({ vaultAddr }, "secrets: using VaultSecretManager");
+    const manager = new VaultSecretManager({
+      baseUrl: vaultAddr,
+      token: vaultToken,
+    });
+    return new TenantSecretsService(manager);
+  }
+
+  log.info("secrets: using EnvSecretManager (no VAULT_ADDR configured)");
+  return new TenantSecretsService(new EnvSecretManager());
+};
+
 export const createWorkflowCallbackWorkerFromEnv =
   async (): Promise<WorkflowCallbackWorker> => {
     const db = createDbFromEnv();
@@ -68,6 +96,7 @@ export const createWorkflowCallbackWorkerFromEnv =
     });
     const eventPublisher = await NatsJetStreamPublisher.connect();
     const provisioningClients = resolveProvisioningClients();
+    const tenantSecretsService = resolveSecretsService();
 
     // Restate verifier is required only when not running the orchestrator path.
     let runtimeStateVerifier: InstanceType<typeof RestateHttpWorkflowClient>;
@@ -95,6 +124,7 @@ export const createWorkflowCallbackWorkerFromEnv =
       workflowRunRepository,
       eventPublisher,
       runtimeStateVerifier,
+      tenantSecretsService,
       ...(provisioningClients ? { provisioningClients } : {}),
     });
   };

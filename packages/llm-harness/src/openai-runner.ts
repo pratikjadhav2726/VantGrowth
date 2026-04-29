@@ -149,6 +149,39 @@ export class OpenAiLlmCallRunner implements LlmCallRunner {
     return new OpenAiLlmCallRunner(new OpenAI(), config);
   }
 
+  /**
+   * Async factory that reads the OpenAI API key from a secrets store first,
+   * falling back to the OPENAI_API_KEY environment variable.
+   *
+   * Accepts a minimal duck-typed `SecretReader` so this package does not need
+   * to depend on `@growthos/secrets`.  Any object with a
+   * `get(path: string): Promise<string | null>` method qualifies.
+   *
+   * @param secretReader  - e.g. an `EnvSecretManager` or `VaultSecretManager`
+   * @param tenantId      - tenant whose scoped key to fetch first
+   * @param config        - optional runner configuration overrides
+   * @throws Error        - when no API key is found in either source
+   */
+  static async fromSecrets(
+    secretReader: { get(path: string): Promise<string | null> },
+    tenantId: string,
+    config: OpenAiLlmCallRunnerConfig = {},
+  ): Promise<OpenAiLlmCallRunner> {
+    const secretPath = `tenants/${tenantId}/openai_api_key`;
+    const fromSecretStore = await secretReader.get(secretPath);
+    const apiKey =
+      (fromSecretStore && fromSecretStore.length > 0
+        ? fromSecretStore
+        : null) ??
+      (process.env.OPENAI_API_KEY?.length ? process.env.OPENAI_API_KEY : null);
+    if (!apiKey) {
+      throw new Error(
+        `OpenAI API key not found in secrets (${secretPath}) or OPENAI_API_KEY env var`,
+      );
+    }
+    return new OpenAiLlmCallRunner(new OpenAI({ apiKey }), config);
+  }
+
   async run<TVars extends Record<string, unknown>>(
     template: PromptTemplate<TVars>,
     vars: TVars,

@@ -15,6 +15,7 @@
   "dependencies": {
     "@growthos/core": "workspace:*",
     "@growthos/db": "workspace:*",
+    "@growthos/secrets": "workspace:*",
     "nats": "^2.29.3",
     "zod": "^3.23.8",
     "@growthos/observability": "workspace:*"

@@ -2,10 +2,12 @@ import {
   InMemoryOutboxRepository,
   InMemoryPlaybookVersionsRepository,
 } from "@growthos/db";
+import { StubLlmCallRunner } from "@growthos/llm-harness";
 import { describe, expect, it, vi } from "vitest";
 import {
   CritiqueWorker,
   type EventPublisher,
+  critiqueWithLlm,
   scoreCritique,
 } from "./critique-worker.js";
 import {
@@ -465,6 +467,253 @@ describe("CritiqueWorker — playbook path", () => {
       candidateOutput: "Short plain text without calls to action.",
     });
     expect(result.reasons.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// critiqueWithLlm
+// ---------------------------------------------------------------------------
+
+const CRITIQUE_TEMPLATE_ID = "critique.evaluate";
+
+const VALID_LLM_VERDICT_JSON = JSON.stringify({
+  verdict: "approve",
+  confidence_score: 0.9,
+  reasons: ["Structure is clear", "Strong CTA present"],
+});
+
+describe("critiqueWithLlm", () => {
+  it("returns verdict and reasons for a valid JSON LLM response", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITIQUE_TEMPLATE_ID]: VALID_LLM_VERDICT_JSON,
+    });
+    const result = await critiqueWithLlm(
+      {
+        tenantId: TENANT_ID,
+        artifactKind: "blog_draft.v1",
+        candidateOutput: richOutput,
+        reviewerNotes: [],
+      },
+      runner,
+    );
+    expect(result).not.toBeNull();
+    expect(result?.verdict).toBe("approve");
+    expect(result?.confidenceScore).toBe(0.9);
+    expect(result?.reasons).toHaveLength(2);
+  });
+
+  it("normalises camelCase confidenceScore key", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITIQUE_TEMPLATE_ID]: JSON.stringify({
+        verdict: "revise",
+        confidenceScore: 0.65,
+        reasons: ["Needs more evidence"],
+      }),
+    });
+    const result = await critiqueWithLlm(
+      {
+        tenantId: TENANT_ID,
+        artifactKind: "blog_draft.v1",
+        candidateOutput: richOutput,
+        reviewerNotes: [],
+      },
+      runner,
+    );
+    expect(result?.confidenceScore).toBe(0.65);
+  });
+
+  it("defaults confidenceScore to 0.7 when not present in response", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITIQUE_TEMPLATE_ID]: JSON.stringify({
+        verdict: "revise",
+        reasons: ["Too short"],
+      }),
+    });
+    const result = await critiqueWithLlm(
+      {
+        tenantId: TENANT_ID,
+        artifactKind: "blog_draft.v1",
+        candidateOutput: richOutput,
+        reviewerNotes: [],
+      },
+      runner,
+    );
+    expect(result?.confidenceScore).toBe(0.7);
+  });
+
+  it("returns null when LLM response contains no JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITIQUE_TEMPLATE_ID]: "Sorry, I cannot evaluate this.",
+    });
+    const result = await critiqueWithLlm(
+      {
+        tenantId: TENANT_ID,
+        artifactKind: "blog_draft.v1",
+        candidateOutput: richOutput,
+        reviewerNotes: [],
+      },
+      runner,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when JSON fails schema validation (unknown verdict)", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITIQUE_TEMPLATE_ID]: JSON.stringify({
+        verdict: "unclear",
+        reasons: ["Hmm"],
+      }),
+    });
+    const result = await critiqueWithLlm(
+      {
+        tenantId: TENANT_ID,
+        artifactKind: "blog_draft.v1",
+        candidateOutput: richOutput,
+        reviewerNotes: [],
+      },
+      runner,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the runner throws", async () => {
+    // Simulate runner failure by replacing the run method.
+    const runner = new StubLlmCallRunner({});
+    vi.spyOn(runner, "run").mockRejectedValueOnce(new Error("LLM unavailable"));
+    const result = await critiqueWithLlm(
+      {
+        tenantId: TENANT_ID,
+        artifactKind: "blog_draft.v1",
+        candidateOutput: richOutput,
+        reviewerNotes: [],
+      },
+      runner,
+    );
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CritiqueWorker — LLM path
+// ---------------------------------------------------------------------------
+
+describe("CritiqueWorker — LLM path", () => {
+  const makePublisher = () => {
+    const events: Array<[string, Record<string, unknown>]> = [];
+    const publisher: EventPublisher = {
+      publish: async (s, p) => {
+        events.push([s, p]);
+      },
+    };
+    return { publisher, events };
+  };
+
+  it("uses LLM verdict when runner is injected and returns valid JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITIQUE_TEMPLATE_ID]: VALID_LLM_VERDICT_JSON,
+    });
+    const outbox = new InMemoryOutboxRepository();
+    const { publisher } = makePublisher();
+
+    const worker = new CritiqueWorker({
+      outboxRepository: outbox,
+      eventPublisher: publisher,
+      llmCallRunner: runner,
+    });
+
+    const result = await worker.critique({
+      ...baseRequest,
+      candidateOutput: richOutput,
+    });
+
+    expect(result.verdict).toBe("approve");
+    expect(result.confidenceScore).toBe(0.9);
+    expect(runner.callHistory).toHaveLength(1);
+    expect(runner.callHistory[0]?.templateId).toBe(CRITIQUE_TEMPLATE_ID);
+  });
+
+  it("falls back to heuristic when LLM returns no JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITIQUE_TEMPLATE_ID]: "I cannot evaluate this right now.",
+    });
+    const outbox = new InMemoryOutboxRepository();
+    const { publisher } = makePublisher();
+
+    const worker = new CritiqueWorker({
+      outboxRepository: outbox,
+      eventPublisher: publisher,
+      llmCallRunner: runner,
+    });
+
+    const result = await worker.critique({
+      ...baseRequest,
+      candidateOutput: richOutput,
+    });
+
+    // Heuristic on richOutput → approve
+    expect(result.verdict).toBe("approve");
+    expect(result.confidenceScore).toBe(0.86);
+  });
+
+  it("falls back to playbook rubric when LLM runner throws", async () => {
+    const runner = new StubLlmCallRunner({});
+    vi.spyOn(runner, "run").mockRejectedValueOnce(new Error("LLM unavailable"));
+
+    const outbox = new InMemoryOutboxRepository();
+    const { publisher } = makePublisher();
+
+    const playbookRepository = new InMemoryPlaybookVersionsRepository();
+    await playbookRepository.create(TENANT_ID, {
+      playbookType: "blog_draft",
+      name: "LLM fallback test playbook",
+      content: makeRubric({
+        rubric: [
+          {
+            id: "has_cta",
+            description: "Contains a call to action",
+            check: "has_cta",
+            weight: 1,
+          },
+        ],
+      }),
+      createdBy: "test",
+    });
+
+    const worker = new CritiqueWorker({
+      outboxRepository: outbox,
+      eventPublisher: publisher,
+      llmCallRunner: runner,
+      playbookRepository,
+    });
+
+    const result = await worker.critique({
+      ...baseRequest,
+      candidateOutput:
+        "Get started with a free trial today and transform your GTM.",
+    });
+
+    // Playbook rubric path: has_cta passes (matches "get started" and "free trial") → approve
+    expect(result.verdict).toBe("approve");
+  });
+
+  it("emits critique.completed.v1 event with LLM-derived verdict", async () => {
+    const runner = new StubLlmCallRunner({
+      [CRITIQUE_TEMPLATE_ID]: VALID_LLM_VERDICT_JSON,
+    });
+    const outbox = new InMemoryOutboxRepository();
+    const { publisher, events } = makePublisher();
+
+    const worker = new CritiqueWorker({
+      outboxRepository: outbox,
+      eventPublisher: publisher,
+      llmCallRunner: runner,
+    });
+
+    await worker.critique({ ...baseRequest, candidateOutput: richOutput });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.[1].verdict).toBe("approve");
+    expect(events[0]?.[1].confidence_score).toBe(0.9);
   });
 });
 

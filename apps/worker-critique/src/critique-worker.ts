@@ -3,20 +3,20 @@
  *
  * Scores a candidate output and emits a `critique.completed.v1` event.
  *
- * Scoring strategy (two-tier, graceful degradation):
+ * Scoring strategy (three-tier, graceful degradation):
  *
- *   1. Playbook-driven (preferred): when `playbookRepository` is injected and
- *      an active `PlaybookVersionRecord` exists for the artifact's kind, the
- *      worker evaluates the candidate against the playbook's rubric criteria
- *      using deterministic checks (`playbook-rubric.ts`).  LLM-based checks
- *      can be swapped in per-criterion in Phase 1 S7 without touching the
- *      worker contract.
+ *   1. LLM-driven (preferred): when `llmCallRunner` is injected, the worker
+ *      calls `CRITIQUE_EVALUATE_PROMPT` for a structured verdict+reasons JSON.
+ *      Falls through to tier 2 on any runner error or invalid JSON.
  *
- *   2. Heuristic fallback: when no playbook is available (or no repo is
- *      injected), the original length/reviewer-notes heuristic runs.  This
- *      keeps the worker useful from day 0 before any playbooks are seeded.
+ *   2. Playbook-driven: when `playbookRepository` is injected and an active
+ *      `PlaybookVersionRecord` exists for the artifact kind, rubric criteria
+ *      are evaluated deterministically (`playbook-rubric.ts`).
  *
- * Verdict thresholds (both paths):
+ *   3. Heuristic fallback: length/reviewer-notes heuristic.  Always available
+ *      from day 0 before any playbook or LLM is configured.
+ *
+ * Verdict thresholds (all paths):
  *   score >= 0.8  → approve
  *   score >= 0.5  → revise
  *   score <  0.5  → reject
@@ -27,6 +27,10 @@ import type {
   PlaybookVersionsRepository,
 } from "@growthos/db";
 import { tenantScopedSubject } from "@growthos/db";
+import {
+  CRITIQUE_EVALUATE_PROMPT,
+  type LlmCallRunner,
+} from "@growthos/llm-harness";
 import {
   type CritiqueRequest,
   type CritiqueResult,
@@ -119,6 +123,11 @@ export interface CritiqueWorkerDependencies {
   outboxRepository: OutboxRepository;
   eventPublisher: EventPublisher;
   /**
+   * Optional: when provided the worker calls CRITIQUE_EVALUATE_PROMPT for
+   * an LLM-driven verdict.  Falls back to playbook or heuristic on failure.
+   */
+  llmCallRunner?: LlmCallRunner;
+  /**
    * Optional: when provided, the worker loads an active playbook for the
    * artifact kind and uses rubric-driven scoring.  Falls back to heuristic
    * when no matching playbook is found or when this is omitted.
@@ -126,15 +135,91 @@ export interface CritiqueWorkerDependencies {
   playbookRepository?: PlaybookVersionsRepository;
 }
 
+// ---------------------------------------------------------------------------
+// LLM response schema
+// ---------------------------------------------------------------------------
+
+import { z } from "zod";
+
+const llmCritiqueResponseSchema = z
+  .object({
+    verdict: z.enum(["approve", "revise", "reject"]),
+    confidence_score: z.number().min(0).max(1).optional(),
+    confidenceScore: z.number().min(0).max(1).optional(),
+    reasons: z.array(z.string()).min(1),
+  })
+  .transform((v) => ({
+    verdict: v.verdict,
+    confidenceScore: v.confidenceScore ?? v.confidence_score ?? 0.7,
+    reasons: v.reasons,
+  }));
+
+// ---------------------------------------------------------------------------
+// Public helper: LLM critique scorer (exported for unit testing)
+// ---------------------------------------------------------------------------
+
+/**
+ * Calls the LLM with CRITIQUE_EVALUATE_PROMPT and parses the structured JSON
+ * response.  Returns null when the runner throws, the response contains no
+ * JSON, or the parsed object fails schema validation.
+ */
+export const critiqueWithLlm = async (
+  request: Pick<
+    CritiqueRequest,
+    "tenantId" | "artifactKind" | "candidateOutput" | "reviewerNotes"
+  >,
+  runner: LlmCallRunner,
+): Promise<{
+  verdict: "approve" | "revise" | "reject";
+  confidenceScore: number;
+  reasons: string[];
+} | null> => {
+  let content: string;
+  try {
+    const rubricHint =
+      request.reviewerNotes.length > 0
+        ? `Reviewer notes: ${request.reviewerNotes.join("; ")}`
+        : "No reviewer notes provided.";
+
+    const result = await runner.run(
+      CRITIQUE_EVALUATE_PROMPT,
+      {
+        artifactKind: request.artifactKind,
+        candidateOutput: request.candidateOutput,
+        rubricCriteria: rubricHint,
+      },
+      { tenantId: request.tenantId, agentId: "critique-worker" },
+    );
+    content = result.content;
+  } catch {
+    return null;
+  }
+
+  const match = content.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+
+  try {
+    const parsed = llmCritiqueResponseSchema.safeParse(JSON.parse(match[0]));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+};
+
 export class CritiqueWorker {
   constructor(private readonly deps: CritiqueWorkerDependencies) {}
 
   async critique(input: CritiqueRequest): Promise<CritiqueResult> {
     const request = critiqueRequestSchema.parse(input);
 
-    // Attempt playbook-driven scoring first.
-    const playbookScore = await this.scoreWithPlaybook(request);
-    const scoring = playbookScore ?? scoreCritique(request);
+    // Three-tier scoring: LLM → playbook rubric → heuristic.
+    const llmScore = this.deps.llmCallRunner
+      ? await critiqueWithLlm(request, this.deps.llmCallRunner)
+      : null;
+    const playbookScore = llmScore
+      ? null
+      : await this.scoreWithPlaybook(request);
+    const scoring = llmScore ?? playbookScore ?? scoreCritique(request);
 
     const result = critiqueResultSchema.parse({
       ...request,

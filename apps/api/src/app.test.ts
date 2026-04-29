@@ -20,29 +20,10 @@ describe("API app", () => {
     expect(response.status).toBe(200);
   });
 
-  it("scores motions with 202 response", async () => {
-    const app = createApp();
-
-    const response = await app.request("http://localhost/v1/motions/score", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        tenantId: "ten_1",
-        productComplexity: 0.7,
-        trialability: 0.6,
-        acvBand: 0.5,
-        salesCycleWeeks: 6,
-        founderContentCapacity: 0.8,
-        categorySearchDemand: 0.9,
-        communityDensity: 0.7,
-        telemetryReadiness: 0.6,
-        budgetReadiness: 0.5,
-      }),
-    });
-
-    expect(response.status).toBe(202);
-    const payload = (await response.json()) as { scorerVersion: string };
-    expect(payload.scorerVersion).toBe("motion_scorer.v1");
+  it("scores motions (legacy inline handler removed — covered by POST /v1/motions suite)", () => {
+    // The inline POST /v1/motions/score was replaced by createMotionsRoutes
+    // which persists scores and returns 201. See the POST /v1/motions suite.
+    expect(true).toBe(true);
   });
 
   it("persists outbox commands through the configured repository", async () => {
@@ -675,15 +656,16 @@ describe("API app", () => {
     expect(response.status).toBe(503);
   });
 
-  it("maps zod validation errors to 400", async () => {
-    const app = createApp();
+  it("maps zod validation errors to 422 for incomplete input", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    const app = createApp({ motionStackRepository });
     const response = await app.request("http://localhost/v1/motions/score", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ tenantId: "missing-fields" }),
     });
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(422);
   });
 
   it("supports integration path with fetch-backed PaperclipClient", async () => {
@@ -983,6 +965,120 @@ describe("POST /v1/approvals/decide", () => {
         outputType: "blog_draft.v1",
         action: "approved",
       }),
+    });
+
+    expect(res.status).toBe(503);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/motions/score
+// ---------------------------------------------------------------------------
+
+const scoringBody = {
+  tenantId,
+  productComplexity: 0.7,
+  trialability: 0.6,
+  acvBand: 0.5,
+  salesCycleWeeks: 6,
+  founderContentCapacity: 0.8,
+  categorySearchDemand: 0.9,
+  communityDensity: 0.7,
+  telemetryReadiness: 0.6,
+  budgetReadiness: 0.5,
+};
+
+describe("POST /v1/motions/score", () => {
+  it("returns 201 with scoreId and scorerVersion", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    const app = createApp({ motionStackRepository });
+
+    const res = await app.request("http://localhost/v1/motions/score", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(scoringBody),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      scoreId: string;
+      scorerVersion: string;
+      scores: Record<string, number>;
+      primaryMotions: string[];
+      secondaryMotions: string[];
+      stackUpdated: boolean;
+    };
+    expect(body.scorerVersion).toBe("motion_scorer.v1");
+    expect(typeof body.scoreId).toBe("string");
+    expect(Array.isArray(body.primaryMotions)).toBe(true);
+    expect(Array.isArray(body.secondaryMotions)).toBe(true);
+    expect(body.primaryMotions).toHaveLength(2);
+    expect(body.secondaryMotions).toHaveLength(2);
+  });
+
+  it("persists the score row to the repository", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    const app = createApp({ motionStackRepository });
+
+    await app.request("http://localhost/v1/motions/score", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(scoringBody),
+    });
+
+    const overview = await motionStackRepository.getOverview(tenantId);
+    expect(overview.latestScore).not.toBeNull();
+    expect(overview.latestScore?.scorerVersion).toBe("motion_scorer.v1");
+    expect(overview.recentScores).toHaveLength(1);
+  });
+
+  it("sets stackUpdated=true when no existing stack", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    const app = createApp({ motionStackRepository });
+
+    const res = await app.request("http://localhost/v1/motions/score", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(scoringBody),
+    });
+
+    const body = (await res.json()) as { stackUpdated: boolean };
+    expect(body.stackUpdated).toBe(true);
+  });
+
+  it("returns 422 for invalid body", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    const app = createApp({ motionStackRepository });
+
+    const res = await app.request("http://localhost/v1/motions/score", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tenantId }),
+    });
+
+    expect(res.status).toBe(422);
+  });
+
+  it("returns 400 for malformed JSON", async () => {
+    const motionStackRepository = new InMemoryMotionStackRepository();
+    const app = createApp({ motionStackRepository });
+
+    const res = await app.request("http://localhost/v1/motions/score", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 503 when motionStackRepository is not configured", async () => {
+    const app = createApp();
+
+    const res = await app.request("http://localhost/v1/motions/score", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(scoringBody),
     });
 
     expect(res.status).toBe(503);
