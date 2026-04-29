@@ -9,9 +9,11 @@ labels:
       environment: dev
     includeSelectors: true
 
-# Example: pin images from CI
+# Pin images from [`.github/workflows/container-images.yml`](../../../../../.github/workflows/container-images.yml) (GHCR):
 # images:
 #   - name: ghcr.io/your-org/growthos-api
-#     newTag: "2026.04.29"
+#     newName: ghcr.io/your-org/growthos-api
+#     newTag: "<git-sha>"
 #   - name: ghcr.io/your-org/growthos-web
-#     newTag: "2026.04.29"
+#     newName: ghcr.io/your-org/growthos-web
+#     newTag: "<git-sha>"

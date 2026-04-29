@@ -119,7 +119,9 @@ pnpm infra:down        # stop and remove volumes (wipes all data)
 
 ### Kubernetes / GitOps (optional)
 
-Reference manifests for **K3s** or any Kubernetes cluster live under [`deploy/gitops/`](deploy/gitops/): Kustomize base + `dev` overlay, sample **Argo CD** `Application`, and placeholder container images. See [`deploy/gitops/README.md`](deploy/gitops/README.md). Optional **Pulumi** bootstrap: [`deploy/pulumi/README.md`](deploy/pulumi/README.md).
+Reference manifests for **K3s** or any Kubernetes cluster live under [`deploy/gitops/`](deploy/gitops/): Kustomize base + `dev` overlay, sample **Argo CD** `Application`, placeholder container images, and a **weekly digest `CronJob`**. See [`deploy/gitops/README.md`](deploy/gitops/README.md). Digest schedule + Secret keys: [`deploy/gitops/k8s/README-weekly-digest-cronjob.md`](deploy/gitops/k8s/README-weekly-digest-cronjob.md). **Private GHCR:** [`deploy/gitops/k8s/overlays/with-ghcr-pull/README.md`](deploy/gitops/k8s/overlays/with-ghcr-pull/README.md) or [`dev-with-ghcr-pull`](deploy/gitops/k8s/overlays/dev-with-ghcr-pull/README.md). Optional **Pulumi** bootstrap: [`deploy/pulumi/README.md`](deploy/pulumi/README.md).
+
+**Container images:** Dockerfiles live under [`docker/`](docker/); on push to `main` / `master`, [`.github/workflows/container-images.yml`](.github/workflows/container-images.yml) builds and pushes **API** and **web** images to **GHCR** (`ghcr.io/<owner>/growthos-api` and `growthos-web`). See [`docker/README.md`](docker/README.md).
 
 After `infra:up` is healthy, apply migrations + seed a dev tenant:
 

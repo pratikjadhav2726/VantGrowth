@@ -1,6 +1,7 @@
 export * from "./approval-feedback-repository.js";
 export * from "./contracts.js";
 export * from "./motion-stack-repository.js";
+export * from "./tenant-settings-repository.js";
 export * from "./db.js";
 export * from "./outbox-repository.js";
 export * from "./playbook-versions-repository.js";
@@ -16,6 +17,7 @@ export {
   motionStack,
   playbookVersions,
   signalEvents,
+  tenantSettings,
   workflowRuns,
   type ApprovalFeedback,
   type EventOutboxRow,

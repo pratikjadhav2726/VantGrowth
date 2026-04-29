@@ -318,3 +318,23 @@ export const signalEvents = growthos.table(
 
 export type SignalEvent = typeof signalEvents.$inferSelect;
 export type NewSignalEvent = typeof signalEvents.$inferInsert;
+
+// ─── tenant_settings ────────────────────────────────────────────────────────
+//
+// One JSON document per tenant (founder console: keys, digest email, onboarding
+// profile, policy toggles). Replaces cookie-only storage when the API persists
+// here; RLS isolates rows by tenant_id.
+
+export const tenantSettings = growthos.table("tenant_settings", {
+  tenantId: uuid("tenant_id").primaryKey(),
+  settings: jsonb("settings")
+    .notNull()
+    .default(sql`'{}'::jsonb`)
+    .$type<Record<string, unknown>>(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export type TenantSettingsRow = typeof tenantSettings.$inferSelect;
+export type NewTenantSettingsRow = typeof tenantSettings.$inferInsert;

@@ -180,6 +180,7 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
   app.use("/v1/paperclip/*", requireToken);
   app.use("/v1/workflows/hello", requireToken);
   app.use("/v1/workflows/tenant-provisioning", requireToken);
+  app.use("/v1/digest/send", requireToken);
 
   app.get("/health", (c) =>
     c.json({

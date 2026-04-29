@@ -29,7 +29,10 @@ spec:
               value: "3001"
             - name: NODE_ENV
               value: production
-            # DATABASE_URL and other secrets: inject via ExternalSecret / sealed secret in your env
+          envFrom:
+            - secretRef:
+                name: growthos-runtime
+                optional: true
           readinessProbe:
             httpGet:
               path: /health

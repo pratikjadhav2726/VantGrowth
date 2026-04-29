@@ -169,4 +169,16 @@ export const GROWTHOS_RLS_TABLE_SPECS: RlsTableSpec[] = [
     `,
     cleanupSql: `DELETE FROM growthos.signal_events WHERE tenant_id = $1::uuid AND source = 'rls-test'`,
   },
+  {
+    qualifiedName: "growthos.tenant_settings",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      INSERT INTO growthos.tenant_settings
+        (tenant_id, settings)
+      VALUES
+        ($1, '{"rlsTest": true}'::jsonb)
+      ON CONFLICT (tenant_id) DO UPDATE SET settings = EXCLUDED.settings
+    `,
+    cleanupSql: `DELETE FROM growthos.tenant_settings WHERE tenant_id = $1::uuid`,
+  },
 ];

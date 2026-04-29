@@ -1430,6 +1430,59 @@ describe("API token auth", () => {
 
     expect(res.status).toBe(200);
   });
+
+  it("GET /v1/digest/weekly is public when apiServiceToken is configured", async () => {
+    const app = createApp({
+      apiServiceToken,
+      motionStackRepository: new InMemoryMotionStackRepository(),
+      outboxRepository: new InMemoryOutboxRepository(),
+      approvalFeedbackRepository: new InMemoryApprovalFeedbackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/digest/weekly", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("returns 401 on POST /v1/digest/send when no Authorization header", async () => {
+    const app = createApp({
+      apiServiceToken,
+      motionStackRepository: new InMemoryMotionStackRepository(),
+      outboxRepository: new InMemoryOutboxRepository(),
+      approvalFeedbackRepository: new InMemoryApprovalFeedbackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/digest/send", {
+      method: "POST",
+      headers: { "X-Tenant-Id": tenantId, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 200 on POST /v1/digest/send with correct token", async () => {
+    const app = createApp({
+      apiServiceToken,
+      motionStackRepository: new InMemoryMotionStackRepository(),
+      outboxRepository: new InMemoryOutboxRepository(),
+      approvalFeedbackRepository: new InMemoryApprovalFeedbackRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/digest/send", {
+      method: "POST",
+      headers: {
+        "X-Tenant-Id": tenantId,
+        "content-type": "application/json",
+        Authorization: `Bearer ${apiServiceToken}`,
+      },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1457,6 +1510,9 @@ describe("/v1/digest", () => {
       secondaryMotions: ["product_led"],
       observeOnly: [],
       deactivated: [],
+      sourceScoreId: null,
+      approvedBy: null,
+      approvedAt: null,
       version: "1",
       createdAt: new Date(),
     });

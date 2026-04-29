@@ -9,6 +9,7 @@ resources:
   - api-service.yaml
   - web-deployment.yaml
   - web-service.yaml
+  - cronjob-weekly-digest.yaml
 
 labels:
   - pairs:

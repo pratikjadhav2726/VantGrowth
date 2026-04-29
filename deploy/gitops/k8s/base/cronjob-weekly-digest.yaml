@@ -1,0 +1,79 @@
+# Weekly digest — CronJob
+#
+# Triggers `POST /v1/digest/send` against the in-cluster API. When the API has
+# `GROWTHOS_API_SERVICE_TOKEN` set, include the same value in Secret
+# `growthos-runtime` under key `GROWTHOS_API_SERVICE_TOKEN`.
+#
+# Required in `growthos-runtime`: `GROWTHOS_DIGEST_TENANT_ID` (UUID).
+# Optional: `GROWTHOS_DIGEST_RECIPIENT_EMAIL` (JSON body override for Postal),
+# `GROWTHOS_API_SERVICE_TOKEN` (Bearer auth when API enforces tokens).
+#
+# Schedule: Sunday 22:00 UTC — adjust in an overlay for local timezone.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: growthos-weekly-digest
+  labels:
+    app.kubernetes.io/name: growthos-weekly-digest
+    app.kubernetes.io/component: cron
+spec:
+  schedule: "0 22 * * 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: growthos-weekly-digest
+            app.kubernetes.io/component: cron
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+          containers:
+            - name: trigger-digest
+              image: curlimages/curl:8.11.1
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: GROWTHOS_API_BASE_URL
+                  value: "http://growthos-api.growthos.svc.cluster.local"
+              envFrom:
+                - secretRef:
+                    name: growthos-runtime
+                    optional: true
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  : "${GROWTHOS_DIGEST_TENANT_ID:?set GROWTHOS_DIGEST_TENANT_ID in growthos-runtime secret}"
+                  REQ_BODY="{}"
+                  if [ -n "${GROWTHOS_DIGEST_RECIPIENT_EMAIL:-}" ]; then
+                    REQ_BODY="{\"recipientEmail\":\"${GROWTHOS_DIGEST_RECIPIENT_EMAIL}\"}"
+                  fi
+                  if [ -n "${GROWTHOS_API_SERVICE_TOKEN:-}" ]; then
+                    exec curl -sS -f -X POST \
+                      -H "Content-Type: application/json" \
+                      -H "X-Tenant-Id: ${GROWTHOS_DIGEST_TENANT_ID}" \
+                      -H "Authorization: Bearer ${GROWTHOS_API_SERVICE_TOKEN}" \
+                      -d "${REQ_BODY}" \
+                      "${GROWTHOS_API_BASE_URL}/v1/digest/send"
+                  fi
+                  exec curl -sS -f -X POST \
+                    -H "Content-Type: application/json" \
+                    -H "X-Tenant-Id: ${GROWTHOS_DIGEST_TENANT_ID}" \
+                    -d "${REQ_BODY}" \
+                    "${GROWTHOS_API_BASE_URL}/v1/digest/send"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
