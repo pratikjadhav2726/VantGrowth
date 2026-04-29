@@ -24,6 +24,9 @@
  */
 
 import { z } from "zod";
+import type { ZitadelClient, ZitadelOrg } from "@growthos/identity";
+import type { BillingClient, PlanCode } from "@growthos/billing";
+import { PLAN_CODE_MOTION_ACTIVE } from "@growthos/billing";
 
 // ---------------------------------------------------------------------------
 // Input / output schemas
@@ -43,10 +46,12 @@ export type TenantProvisioningInputV1 = z.infer<
 >;
 
 export const provisioningStepSchema = z.enum([
+  "zitadel_org",
   "paperclip_company",
   "gitea_workspace_repo",
   "nats_consumer_groups",
   "minio_bucket",
+  "lago_customer",
   "seed_founder_doc",
 ]);
 export type ProvisioningStep = z.infer<typeof provisioningStepSchema>;
@@ -142,6 +147,8 @@ export interface ProvisioningProgressReporter {
 // ---------------------------------------------------------------------------
 
 export interface TenantProvisioningClients {
+  zitadel: ZitadelClient;
+  billing: BillingClient;
   paperclip: PaperclipProvisioningClient;
   gitea: GiteaProvisioningClient;
   nats: NatsProvisioningClient;
@@ -164,6 +171,17 @@ export const tenantNatsConsumerName = (tenantId: string): string =>
 /** NATS filter subject for all events belonging to a tenant. */
 export const tenantNatsFilterSubject = (tenantId: string): string =>
   `t.${tenantId}.>`;
+
+/** Zitadel org name for a tenant. */
+export const tenantZitadelOrgName = (tenantName: string): string =>
+  `growthos-${tenantName}`;
+
+/** Lago external customer ID for a tenant (= tenantId). */
+export const tenantLagoCustomerId = (tenantId: string): string => tenantId;
+
+/** Lago external subscription ID for the motion-active plan. */
+export const tenantLagoMotionSubId = (tenantId: string): string =>
+  `${tenantId}-motion-active`;
 
 const FOUNDER_MD_TEMPLATE = (tenantName: string, tenantId: string): string =>
   `# ${tenantName} — GrowthOS Workspace
@@ -212,10 +230,30 @@ export class TenantProvisioningOrchestrator {
     const parsed = tenantProvisioningInputV1Schema.parse(input);
     const steps: ProvisioningStepResult[] = [];
 
+    // ── Step 0: Zitadel org ────────────────────────────────────────────────
+    await this.clients.progress.report({
+      step: "zitadel_org",
+      progressPercent: 5,
+      message: `Provisioning Zitadel organisation for ${parsed.tenantName}`,
+    });
+    const org = await this.clients.zitadel.createOrg({
+      name: tenantZitadelOrgName(parsed.tenantName),
+    });
+    await this.clients.zitadel.createServiceAccount({
+      orgId: org.orgId,
+      userName: "growthos-api",
+      displayName: "GrowthOS API Service Account",
+    });
+    steps.push({
+      step: "zitadel_org",
+      skipped: false,
+      output: { orgId: org.orgId, orgName: org.name },
+    });
+
     // ── Step 1: Paperclip company ──────────────────────────────────────────
     await this.clients.progress.report({
       step: "paperclip_company",
-      progressPercent: 10,
+      progressPercent: 15,
       message: `Provisioning Paperclip company for ${parsed.tenantName}`,
     });
     const companyResult = await this.clients.paperclip.provisionCompany({
@@ -232,7 +270,7 @@ export class TenantProvisioningOrchestrator {
     // ── Step 2: Gitea workspace repo ───────────────────────────────────────
     await this.clients.progress.report({
       step: "gitea_workspace_repo",
-      progressPercent: 30,
+      progressPercent: 35,
       message: `Provisioning workspace repository for tenant ${parsed.tenantId}`,
     });
     const repoResult = await this.clients.gitea.provisionWorkspaceRepo({
@@ -249,7 +287,7 @@ export class TenantProvisioningOrchestrator {
     // ── Step 3: NATS consumer groups ───────────────────────────────────────
     await this.clients.progress.report({
       step: "nats_consumer_groups",
-      progressPercent: 55,
+      progressPercent: 52,
       message: `Provisioning NATS consumer group for tenant ${parsed.tenantId}`,
     });
     const natsResult = await this.clients.nats.provisionConsumerGroup({
@@ -266,7 +304,7 @@ export class TenantProvisioningOrchestrator {
     // ── Step 4: MinIO bucket ───────────────────────────────────────────────
     await this.clients.progress.report({
       step: "minio_bucket",
-      progressPercent: 70,
+      progressPercent: 67,
       message: `Provisioning MinIO bucket ${tenantBucketName(parsed.tenantId)}`,
     });
     const bucketResult = await this.clients.minio.provisionBucket({
@@ -279,10 +317,31 @@ export class TenantProvisioningOrchestrator {
       output: { bucketName: bucketResult.bucketName },
     });
 
-    // ── Step 5: Seed FOUNDER.md ────────────────────────────────────────────
+    // ── Step 5: Lago billing customer ─────────────────────────────────────
+    await this.clients.progress.report({
+      step: "lago_customer",
+      progressPercent: 80,
+      message: `Provisioning Lago billing customer for tenant ${parsed.tenantId}`,
+    });
+    const lagoCustomer = await this.clients.billing.createCustomer({
+      externalId: tenantLagoCustomerId(parsed.tenantId),
+      name: parsed.tenantName,
+    });
+    const lagoSub = await this.clients.billing.assignPlan({
+      customerExternalId: tenantLagoCustomerId(parsed.tenantId),
+      planCode: PLAN_CODE_MOTION_ACTIVE,
+      subscriptionExternalId: tenantLagoMotionSubId(parsed.tenantId),
+    });
+    steps.push({
+      step: "lago_customer",
+      skipped: false,
+      output: { lagoCustomerId: lagoCustomer.lagoId, subscriptionId: lagoSub.lagoId, planCode: lagoSub.planCode },
+    });
+
+    // ── Step 6: Seed FOUNDER.md ────────────────────────────────────────────
     await this.clients.progress.report({
       step: "seed_founder_doc",
-      progressPercent: 85,
+      progressPercent: 90,
       message: "Seeding FOUNDER.md in workspace repository",
     });
     const fileResult = await this.clients.gitea.createOrUpdateFile({

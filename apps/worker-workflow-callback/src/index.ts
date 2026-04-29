@@ -8,6 +8,8 @@ import {
   StubPaperclipProvisioningClient,
   restateConfigFromEnv,
 } from "@growthos/core";
+import { HttpZitadelClient, StubZitadelClient } from "@growthos/identity";
+import { HttpLagoBillingClient, StubBillingClient } from "@growthos/billing";
 import {
   PostgresOutboxRepository,
   PostgresWorkflowRunRepository,
@@ -41,16 +43,26 @@ const resolveProvisioningClients = (): ProvisioningClients | undefined => {
 
   const useRealGitea = process.env.ENABLE_REAL_GITEA_CLIENT === "true";
   const useRealMinio = process.env.ENABLE_REAL_MINIO_CLIENT === "true";
+  const useRealZitadel = process.env.ENABLE_REAL_ZITADEL_CLIENT === "true";
+  const useRealLago = process.env.ENABLE_REAL_LAGO_CLIENT === "true";
 
   log.info(
     {
       gitea: useRealGitea ? "http" : "stub",
       minio: useRealMinio ? "http" : "stub",
+      zitadel: useRealZitadel ? "http" : "stub",
+      lago: useRealLago ? "http" : "stub",
     },
     "direct provisioning enabled",
   );
 
   return {
+    zitadel: useRealZitadel
+      ? HttpZitadelClient.fromEnv()
+      : new StubZitadelClient(),
+    billing: useRealLago
+      ? HttpLagoBillingClient.fromEnv()
+      : new StubBillingClient(),
     paperclip: new StubPaperclipProvisioningClient(),
     gitea: useRealGitea
       ? HttpGiteaProvisioningClient.fromEnv()

@@ -32,6 +32,8 @@ import {
   createTenantProvisioningProgressOutboxCommand,
   tenantProvisioningWorkflowInputSchema,
 } from "@growthos/core";
+import type { ZitadelClient } from "@growthos/identity";
+import type { BillingClient } from "@growthos/billing";
 import type { OutboxRepository, WorkflowRunRepository } from "@growthos/db";
 import { tenantScopedSubject } from "@growthos/db";
 import type { TenantSecretsService } from "@growthos/secrets";
@@ -50,6 +52,8 @@ export interface RuntimeStateVerifier {
 
 /** External system clients needed by the orchestrator for direct provisioning. */
 export interface ProvisioningClients {
+  zitadel: ZitadelClient;
+  billing: BillingClient;
   paperclip: PaperclipProvisioningClient;
   gitea: GiteaProvisioningClient;
   nats: NatsProvisioningClient;

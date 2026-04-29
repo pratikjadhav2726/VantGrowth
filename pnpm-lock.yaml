@@ -323,12 +323,18 @@ importers:
 
   apps/worker-workflow-callback:
     dependencies:
+      '@growthos/billing':
+        specifier: workspace:*
+        version: link:../../packages/billing
       '@growthos/core':
         specifier: workspace:*
         version: link:../../packages/core
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@growthos/identity':
+        specifier: workspace:*
+        version: link:../../packages/identity
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -352,11 +358,27 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
+  packages/billing:
+    dependencies:
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: '*'
+        version: 2.1.9(@types/node@22.19.17)
+
   packages/core:
     dependencies:
       '@aws-sdk/client-s3':
         specifier: ^3.1038.0
         version: 3.1038.0
+      '@growthos/billing':
+        specifier: workspace:*
+        version: link:../billing
+      '@growthos/identity':
+        specifier: workspace:*
+        version: link:../identity
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -387,6 +409,16 @@ importers:
         version: 4.21.0
 
   packages/design-system: {}
+
+  packages/identity:
+    dependencies:
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: '*'
+        version: 2.1.9(@types/node@22.19.17)
 
   packages/llm-harness:
     dependencies:

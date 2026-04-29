@@ -15,6 +15,8 @@
   "dependencies": {
     "@growthos/core": "workspace:*",
     "@growthos/db": "workspace:*",
+    "@growthos/identity": "workspace:*",
+    "@growthos/billing": "workspace:*",
     "@growthos/secrets": "workspace:*",
     "nats": "^2.29.3",
     "zod": "^3.23.8",

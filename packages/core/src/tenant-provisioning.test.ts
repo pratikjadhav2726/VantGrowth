@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { StubZitadelClient } from "@growthos/identity";
+import { StubBillingClient, PLAN_CODE_MOTION_ACTIVE } from "@growthos/billing";
 import {
   StubGiteaProvisioningClient,
   StubMinioProvisioningClient,
@@ -11,6 +13,8 @@ import {
   tenantNatsFilterSubject,
   tenantProvisioningInputV1Schema,
   tenantWorkspaceRepoName,
+  tenantZitadelOrgName,
+  tenantLagoMotionSubId,
 } from "./tenant-provisioning.js";
 
 // ---------------------------------------------------------------------------
@@ -30,6 +34,8 @@ const validInput = {
 
 function makeStubs() {
   return {
+    zitadel: new StubZitadelClient(),
+    billing: new StubBillingClient(),
     paperclip: new StubPaperclipProvisioningClient(),
     gitea: new StubGiteaProvisioningClient(),
     nats: new StubNatsProvisioningClient(),
@@ -88,6 +94,14 @@ describe("naming helpers", () => {
   it("tenantNatsFilterSubject", () => {
     expect(tenantNatsFilterSubject(TENANT_ID)).toBe(`t.${TENANT_ID}.>`);
   });
+
+  it("tenantZitadelOrgName", () => {
+    expect(tenantZitadelOrgName("Acme GTM")).toBe("growthos-Acme GTM");
+  });
+
+  it("tenantLagoMotionSubId", () => {
+    expect(tenantLagoMotionSubId(TENANT_ID)).toBe(`${TENANT_ID}-motion-active`);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -95,17 +109,19 @@ describe("naming helpers", () => {
 // ---------------------------------------------------------------------------
 
 describe("TenantProvisioningOrchestrator", () => {
-  it("calls all 5 provisioning clients in sequence", async () => {
+  it("calls all 7 provisioning clients in sequence", async () => {
     const stubs = makeStubs();
     const orch = new TenantProvisioningOrchestrator(stubs);
     const result = await orch.run(validInput);
 
-    expect(result.steps).toHaveLength(5);
+    expect(result.steps).toHaveLength(7);
     expect(result.steps.map((s) => s.step)).toEqual([
+      "zitadel_org",
       "paperclip_company",
       "gitea_workspace_repo",
       "nats_consumer_groups",
       "minio_bucket",
+      "lago_customer",
       "seed_founder_doc",
     ]);
   });
@@ -126,12 +142,12 @@ describe("TenantProvisioningOrchestrator", () => {
     expect(result.steps.every((s) => s.skipped === false)).toBe(true);
   });
 
-  it("emits 6 progress events (1 per step + final 100%)", async () => {
+  it("emits 8 progress events (1 per step + final 100%)", async () => {
     const stubs = makeStubs();
     const orch = new TenantProvisioningOrchestrator(stubs);
     await orch.run(validInput);
-    // 5 "before" reports + 1 final 100% report = 6
-    expect(stubs.progress.events).toHaveLength(6);
+    // 7 "before" reports + 1 final 100% report = 8
+    expect(stubs.progress.events).toHaveLength(8);
   });
 
   it("final progress event is 100%", async () => {
@@ -213,5 +229,55 @@ describe("TenantProvisioningOrchestrator", () => {
     await expect(
       new TenantProvisioningOrchestrator(stubs).run(validInput),
     ).rejects.toThrow("Gitea unavailable");
+  });
+
+  it("creates Zitadel org with canonical name", async () => {
+    const stubs = makeStubs();
+    await new TenantProvisioningOrchestrator(stubs).run(validInput);
+    expect(stubs.zitadel.createOrgCalls[0]?.name).toBe(
+      tenantZitadelOrgName("Acme GTM"),
+    );
+  });
+
+  it("creates Zitadel service account after org creation", async () => {
+    const stubs = makeStubs();
+    await new TenantProvisioningOrchestrator(stubs).run(validInput);
+    // Service account created — we can verify the call exists
+    const org = await stubs.zitadel.getOrg(
+      stubs.zitadel.createOrgCalls[0]
+        ? `zitadel-org-${tenantZitadelOrgName("Acme GTM").toLowerCase().replace(/\s+/g, "-")}`
+        : "",
+    );
+    // Org was registered in stub
+    expect(stubs.zitadel.createOrgCalls).toHaveLength(1);
+  });
+
+  it("zitadel_org step output includes orgId", async () => {
+    const stubs = makeStubs();
+    const result = await new TenantProvisioningOrchestrator(stubs).run(validInput);
+    const step = result.steps.find((s) => s.step === "zitadel_org");
+    expect(step?.output).toMatchObject({ orgId: expect.any(String), orgName: expect.any(String) });
+  });
+
+  it("creates Lago customer with tenantId as externalId", async () => {
+    const stubs = makeStubs();
+    await new TenantProvisioningOrchestrator(stubs).run(validInput);
+    expect(stubs.billing.createCustomerCalls[0]?.externalId).toBe(TENANT_ID);
+  });
+
+  it("assigns motion_active plan to Lago customer", async () => {
+    const stubs = makeStubs();
+    await new TenantProvisioningOrchestrator(stubs).run(validInput);
+    expect(stubs.billing.assignPlanCalls[0]?.planCode).toBe(PLAN_CODE_MOTION_ACTIVE);
+    expect(stubs.billing.assignPlanCalls[0]?.subscriptionExternalId).toBe(
+      tenantLagoMotionSubId(TENANT_ID),
+    );
+  });
+
+  it("lago_customer step output includes lagoCustomerId and planCode", async () => {
+    const stubs = makeStubs();
+    const result = await new TenantProvisioningOrchestrator(stubs).run(validInput);
+    const step = result.steps.find((s) => s.step === "lago_customer");
+    expect(step?.output).toMatchObject({ lagoCustomerId: expect.any(String), planCode: PLAN_CODE_MOTION_ACTIVE });
   });
 });

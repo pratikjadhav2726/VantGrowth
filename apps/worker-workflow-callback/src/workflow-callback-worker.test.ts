@@ -5,6 +5,8 @@ import {
   StubNatsProvisioningClient,
   StubPaperclipProvisioningClient,
 } from "@growthos/core";
+import { StubZitadelClient } from "@growthos/identity";
+import { StubBillingClient } from "@growthos/billing";
 import {
   InMemoryOutboxRepository,
   InMemoryWorkflowRunRepository,
@@ -189,6 +191,8 @@ describe("WorkflowCallbackWorker", () => {
 // ---------------------------------------------------------------------------
 
 const makeProvisioningClients = (): ProvisioningClients => ({
+  zitadel: new StubZitadelClient(),
+  billing: new StubBillingClient(),
   paperclip: new StubPaperclipProvisioningClient(),
   gitea: new StubGiteaProvisioningClient(),
   nats: new StubNatsProvisioningClient(),
@@ -205,7 +209,7 @@ describe("WorkflowCallbackWorker — orchestrator path", () => {
     requestedBy: "founder",
   };
 
-  it("runs all 5 provisioning steps and emits progress + completed events", async () => {
+  it("runs all 7 provisioning steps and emits progress + completed events", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
     const workflowRunRepository = new InMemoryWorkflowRunRepository();
     const eventPublisher: EventPublisher = {
@@ -227,18 +231,17 @@ describe("WorkflowCallbackWorker — orchestrator path", () => {
       await worker.processTenantProvisioningCompletion(provisioningRequest);
 
     expect(result.state).toBe("completed");
-    expect(result.history).toHaveLength(5);
+    expect(result.history).toHaveLength(7);
 
     const events = await outboxRepository.listUnconsumed(tenantId, 20);
     const eventTypes = events.map((e) => e.eventType);
 
-    // 6 progress events (5 steps × 1 report each — except seed_founder_doc
-    // which reports at 85% and 100%) + 1 completed = up to 7 total outbox entries.
+    // 8 progress events (7 steps × 1 report each + 1 final 100%) + 1 completed.
     // There will be at least one progress + one completed.
     expect(
       eventTypes.filter((t) => t === "workflow.tenant_provisioning.progress.v1")
         .length,
-    ).toBeGreaterThanOrEqual(5);
+    ).toBeGreaterThanOrEqual(7);
     expect(eventTypes).toContain("workflow.tenant_provisioning.completed.v1");
 
     const run = await workflowRunRepository.getByWorkflowId(
@@ -384,12 +387,7 @@ describe("WorkflowCallbackWorker — secrets provisioning", () => {
           throw new Error("not used");
         }),
       },
-      provisioningClients: {
-        paperclip: new StubPaperclipProvisioningClient(),
-        gitea: new StubGiteaProvisioningClient(),
-        nats: new StubNatsProvisioningClient(),
-        minio: new StubMinioProvisioningClient(),
-      },
+      provisioningClients: makeProvisioningClients(),
       tenantSecretsService,
     });
 
@@ -418,12 +416,7 @@ describe("WorkflowCallbackWorker — secrets provisioning", () => {
           throw new Error("not used");
         }),
       },
-      provisioningClients: {
-        paperclip: new StubPaperclipProvisioningClient(),
-        gitea: new StubGiteaProvisioningClient(),
-        nats: new StubNatsProvisioningClient(),
-        minio: new StubMinioProvisioningClient(),
-      },
+      provisioningClients: makeProvisioningClients(),
       // tenantSecretsService intentionally omitted
     });
 
