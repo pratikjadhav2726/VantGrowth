@@ -18,6 +18,7 @@ import {
   type WorkflowRunRepository,
   createDbFromEnv,
 } from "@growthos/db";
+import { type LlmCallRunner, OpenAiLlmCallRunner } from "@growthos/llm-harness";
 import {
   createHttpMiddleware,
   createLogger,
@@ -45,6 +46,12 @@ export interface AppDependencies {
   signalEventsRepository?: SignalEventsRepository;
   approvalFeedbackRepository?: ApprovalFeedbackRepository;
   motionStackRepository?: MotionStackRepository;
+  /**
+   * Optional LLM runner for `POST /v1/signals/grade`. When omitted, resolves
+   * from `OPENAI_API_KEY` via `OpenAiLlmCallRunner.fromEnv()`. Pass `null` in
+   * tests to force unconfigured behaviour.
+   */
+  llmCallRunner?: LlmCallRunner | null;
 }
 
 const resolvePaperclipClient = (
@@ -123,6 +130,16 @@ const resolveMotionStackRepository = (
   return new PostgresMotionStackRepository(createDbFromEnv());
 };
 
+const resolveLlmCallRunner = (deps: AppDependencies): LlmCallRunner | null => {
+  if (deps.llmCallRunner !== undefined) {
+    return deps.llmCallRunner;
+  }
+  if (process.env.OPENAI_API_KEY) {
+    return OpenAiLlmCallRunner.fromEnv();
+  }
+  return null;
+};
+
 export const createApp = (deps: AppDependencies = {}): Hono => {
   const app = new Hono();
 
@@ -170,6 +187,7 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
     "/v1/signals",
     createSignalRoutes({
       signalEventsRepository: resolveSignalEventsRepository(deps),
+      llmCallRunner: resolveLlmCallRunner(deps),
     }),
   );
   app.route(

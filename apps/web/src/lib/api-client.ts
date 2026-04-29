@@ -121,10 +121,6 @@ export const submitApprovalDecision = (
 // Motion stack types + client methods
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Motion stack types + client methods
-// ---------------------------------------------------------------------------
-
 export const motionScoreRowSchema = z.object({
   id: z.string(),
   tenantId: z.string(),
@@ -159,6 +155,71 @@ export type MotionOverview = z.infer<typeof motionOverviewSchema>;
 export const getMotionOverview = (tenantId: string, historyLimit = 7) =>
   apiFetch(`/v1/motion?historyLimit=${historyLimit}`, tenantId, {
     schema: motionOverviewSchema,
+  });
+
+/** Fields for `POST /v1/motions/score` (tenantId passed separately for header + body). */
+export const motionScoringFieldsSchema = z.object({
+  productComplexity: z.number().min(0).max(1),
+  trialability: z.number().min(0).max(1),
+  acvBand: z.number().min(0).max(1),
+  salesCycleWeeks: z.number().min(0),
+  founderContentCapacity: z.number().min(0).max(1),
+  categorySearchDemand: z.number().min(0).max(1),
+  communityDensity: z.number().min(0).max(1),
+  telemetryReadiness: z.number().min(0).max(1),
+  budgetReadiness: z.number().min(0).max(1),
+});
+export type MotionScoringFields = z.infer<typeof motionScoringFieldsSchema>;
+
+export const motionScoreResponseSchema = z.object({
+  scoreId: z.string(),
+  scorerVersion: z.string(),
+  scores: z.record(z.number()),
+  primaryMotions: z.array(z.string()),
+  secondaryMotions: z.array(z.string()),
+  rationale: z.array(z.string()),
+  stackUpdated: z.boolean(),
+});
+export type MotionScoreResponse = z.infer<typeof motionScoreResponseSchema>;
+
+export const postMotionScore = (
+  tenantId: string,
+  fields: MotionScoringFields,
+) =>
+  apiFetch("/v1/motions/score", tenantId, {
+    method: "POST",
+    body: JSON.stringify({ tenantId, ...fields }),
+    schema: motionScoreResponseSchema,
+  });
+
+const signalGradeShape = z.object({
+  relevance: z.number(),
+  urgency: z.enum(["low", "medium", "high"]),
+  topicCategory: z.string(),
+  actionRecommendations: z.array(z.string()),
+});
+
+export const signalGradeApiResponseSchema = z.object({
+  graded: z.boolean(),
+  grade: signalGradeShape.nullable(),
+});
+export type SignalGradeApiResponse = z.infer<
+  typeof signalGradeApiResponseSchema
+>;
+
+export const postSignalGrade = (
+  tenantId: string,
+  body: {
+    signalType: string;
+    source: string;
+    payload?: Record<string, unknown>;
+    motionContext?: string;
+  },
+) =>
+  apiFetch("/v1/signals/grade", tenantId, {
+    method: "POST",
+    body: JSON.stringify(body),
+    schema: signalGradeApiResponseSchema,
   });
 
 // ---------------------------------------------------------------------------

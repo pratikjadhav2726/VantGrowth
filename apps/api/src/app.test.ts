@@ -8,6 +8,7 @@ import {
   InMemorySignalEventsRepository,
   InMemoryWorkflowRunRepository,
 } from "@growthos/db";
+import { StubLlmCallRunner } from "@growthos/llm-harness";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
 
@@ -832,6 +833,121 @@ describe("POST /v1/signals", () => {
         "X-Tenant-Id": tenantId,
       },
       body: JSON.stringify(makeSignalBody()),
+    });
+
+    expect(res.status).toBe(503);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/signals/grade
+// ---------------------------------------------------------------------------
+
+describe("POST /v1/signals/grade", () => {
+  const VALID_GRADE_JSON = JSON.stringify({
+    relevance: 0.82,
+    urgency: "high",
+    topic_category: "competitive_intel",
+    action_recommendations: ["Monitor pricing page"],
+  });
+
+  it("returns graded=true with parsed grade when LLM returns valid JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      "signal.grade": VALID_GRADE_JSON,
+    });
+    const app = createApp({ llmCallRunner: runner });
+
+    const res = await app.request("http://localhost/v1/signals/grade", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        signalType: "competitive",
+        source: "g2",
+        payload: { text: "Competitor dropped prices" },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      graded: boolean;
+      grade: { relevance: number; topicCategory: string };
+    };
+    expect(body.graded).toBe(true);
+    expect(body.grade?.relevance).toBe(0.82);
+    expect(body.grade?.topicCategory).toBe("competitive_intel");
+  });
+
+  it("returns graded=false when LLM output has no JSON", async () => {
+    const runner = new StubLlmCallRunner({
+      "signal.grade": "Cannot grade this.",
+    });
+    const app = createApp({ llmCallRunner: runner });
+
+    const res = await app.request("http://localhost/v1/signals/grade", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        signalType: "market",
+        source: "twitter",
+        payload: {},
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { graded: boolean; grade: null };
+    expect(body.graded).toBe(false);
+    expect(body.grade).toBeNull();
+  });
+
+  it("returns 400 when X-Tenant-Id is missing", async () => {
+    const runner = new StubLlmCallRunner({ "signal.grade": VALID_GRADE_JSON });
+    const app = createApp({ llmCallRunner: runner });
+
+    const res = await app.request("http://localhost/v1/signals/grade", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ signalType: "market", source: "x", payload: {} }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 422 for invalid body", async () => {
+    const runner = new StubLlmCallRunner({ "signal.grade": VALID_GRADE_JSON });
+    const app = createApp({ llmCallRunner: runner });
+
+    const res = await app.request("http://localhost/v1/signals/grade", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({ source: "only-source" }),
+    });
+
+    expect(res.status).toBe(422);
+  });
+
+  it("returns 503 when llmCallRunner is not configured", async () => {
+    const app = createApp({ llmCallRunner: null });
+
+    const res = await app.request("http://localhost/v1/signals/grade", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        signalType: "market",
+        source: "twitter",
+        payload: {},
+      }),
     });
 
     expect(res.status).toBe(503);

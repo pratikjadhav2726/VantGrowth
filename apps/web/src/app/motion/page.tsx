@@ -5,6 +5,7 @@
  * Falls back to seed-data placeholders when no scores are recorded yet.
  */
 
+import { MotionScoreForm } from "@/components/motion-score-form";
 import { StatusBadge } from "@/components/status-badge";
 import { type MotionOverview, getMotionOverview } from "@/lib/api-client";
 
@@ -283,17 +284,34 @@ export default async function MotionPage() {
         </div>
       )}
 
+      {/* ── Motion scoring form ───────────────────────────────────────── */}
+      <div className="mt-8">
+        <h3 className="text-sm font-semibold text-gray-900">
+          Run or refresh motion scoring
+        </h3>
+        <p className="mt-1 text-sm text-gray-500">
+          Adjust GTM inputs and persist a new{" "}
+          <code className="rounded bg-gray-100 px-1">motion_scores</code> row
+          via{" "}
+          <code className="rounded bg-gray-100 px-1">
+            POST /v1/motions/score
+          </code>
+          . Requires API and database (same tenant as this page).
+        </p>
+        <MotionScoreForm tenantId={DEV_TENANT_ID} />
+      </div>
+
       {/* ── Scorer metadata (seed data) ─────────────────────────────── */}
       {!isLiveData && (
         <div className="mt-6 rounded-lg border border-gray-200 bg-white p-6">
-          <h3 className="text-sm font-semibold text-gray-900">Run scoring</h3>
+          <h3 className="text-sm font-semibold text-gray-900">No scores yet</h3>
           <p className="mt-1 text-sm text-gray-500">
-            Submit a motion scoring request via the API to populate live data:
+            Use the form above, or call the API directly:
           </p>
           <pre className="mt-3 overflow-x-auto rounded-md bg-gray-50 p-3 text-xs text-gray-700">
             {`curl -X POST http://localhost:3000/v1/motions/score \\
   -H "Content-Type: application/json" \\
-  -d '{"tenantId":"${DEV_TENANT_ID}","productComplexity":0.7,"trialability":0.6,"acvBand":0.5,"salesCycleWeeks":6,"founderContentCapacity":0.8,"categorySearchDemand":0.9,"communityDensity":0.7,"telemetryReadiness":0.6,"budgetReadiness":0.5}'`}
+  -d '{"tenantId":"${DEV_TENANT_ID}","productComplexity":0.7,...}'`}
           </pre>
         </div>
       )}

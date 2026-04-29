@@ -6,8 +6,12 @@
  *     → signal_events (Postgres) → IntelDirectorWorker (polls listUnprocessed)
  *       → intel_brief.v1 NATS event → content pipeline
  *
- * The endpoint is idempotent: duplicate `externalId` values for the same
- * tenant return HTTP 200 with `inserted: false` and the existing signal's ID.
+ * **POST /v1/signals/grade** — LLM preview of signal quality (same pipeline as
+ * `SignalRouter` grading). Does not persist; requires `OPENAI_API_KEY` or an
+ * injected `LlmCallRunner` in tests.
+ *
+ * The ingest endpoint is idempotent: duplicate `externalId` values for the same
+ * tenant return HTTP 202 with `inserted: false` and the existing signal's ID.
  */
 
 import {
@@ -16,6 +20,7 @@ import {
   type SignalTypeValue,
   signalTypeValues,
 } from "@growthos/db";
+import { type LlmCallRunner, gradeSignalPayload } from "@growthos/llm-harness";
 import { Hono } from "hono";
 import { z } from "zod";
 import { ServiceUnavailableError } from "../http-errors.js";
@@ -41,7 +46,14 @@ export const ingestSignalRequestSchema = z.object({
   payload: z.record(z.unknown()).optional(),
 });
 
-export type IngestSignalRequest = z.infer<typeof ingestSignalRequestSchema>;
+export const signalGradeRequestSchema = z.object({
+  signalType: z.string().min(1).max(100),
+  source: z.string().min(1).max(100),
+  payload: z.record(z.unknown()).optional(),
+  motionContext: z.string().max(2000).optional(),
+});
+
+export type SignalGradeRequest = z.infer<typeof signalGradeRequestSchema>;
 
 // ---------------------------------------------------------------------------
 // Route dependencies
@@ -49,6 +61,8 @@ export type IngestSignalRequest = z.infer<typeof ingestSignalRequestSchema>;
 
 export interface SignalRouteDependencies {
   signalEventsRepository: SignalEventsRepository | null;
+  /** When unset or null, `POST /grade` returns 503. */
+  llmCallRunner?: LlmCallRunner | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +116,64 @@ export const createSignalRoutes = (deps: SignalRouteDependencies): Hono => {
         tenantId: result.event.tenantId,
       },
       202,
+    );
+  });
+
+  /**
+   * POST /v1/signals/grade
+   *
+   * Headers: X-Tenant-Id (required)
+   * Body: { signalType, source, payload?, motionContext? }
+   *
+   * Runs LLM signal quality grading (same pipeline as SignalRouter). Returns
+   * `{ graded: boolean, grade: SignalGrade | null }` — `graded` is true when
+   * the model returned a valid structured grade.
+   */
+  route.post("/grade", async (c) => {
+    if (!deps.llmCallRunner) {
+      throw new ServiceUnavailableError(
+        "LLM runner is not configured. Set OPENAI_API_KEY for OpenAI-backed grading.",
+      );
+    }
+
+    const tenantId = c.req.header("X-Tenant-Id");
+    if (!tenantId) {
+      return c.json({ error: "X-Tenant-Id header is required" }, 400);
+    }
+
+    const body = await c.req.json().catch(() => null);
+    if (!body) {
+      return c.json({ error: "Request body must be valid JSON" }, 400);
+    }
+
+    const parsed = signalGradeRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        {
+          error: "Invalid request",
+          details: parsed.error.flatten().fieldErrors,
+        },
+        422,
+      );
+    }
+
+    const grade = await gradeSignalPayload(
+      {
+        tenantId,
+        signalType: parsed.data.signalType,
+        source: parsed.data.source,
+        payload: parsed.data.payload ?? {},
+      },
+      deps.llmCallRunner,
+      parsed.data.motionContext ?? "inbound_content, plg",
+    );
+
+    return c.json(
+      {
+        graded: grade !== null,
+        grade,
+      },
+      200,
     );
   });
 

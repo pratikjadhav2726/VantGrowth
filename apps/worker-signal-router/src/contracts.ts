@@ -1,3 +1,4 @@
+import { signalGradeSchema } from "@growthos/llm-harness";
 import { z } from "zod";
 
 export const signalPrioritySchema = z.enum(["P0", "P1", "P2", "P3"]);
@@ -13,15 +14,8 @@ export const incomingSignalSchema = z.object({
 
 export type IncomingSignal = z.infer<typeof incomingSignalSchema>;
 
-/** LLM-graded quality metadata for a signal. */
-export const signalGradeSchema = z.object({
-  relevance: z.number().min(0).max(1),
-  urgency: z.enum(["low", "medium", "high"]),
-  topicCategory: z.string().min(1),
-  actionRecommendations: z.array(z.string()),
-});
-
-export type SignalGrade = z.infer<typeof signalGradeSchema>;
+export type { SignalGrade } from "@growthos/llm-harness";
+export { signalGradeSchema };
 
 export const routedSignalSchema = incomingSignalSchema.extend({
   priority: signalPrioritySchema,
