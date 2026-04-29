@@ -13,12 +13,19 @@ import {
   PostgresMotionStackRepository,
   PostgresOutboxRepository,
   PostgresSignalEventsRepository,
+  PostgresTenantSettingsRepository,
   PostgresWorkflowRunRepository,
   type SignalEventsRepository,
+  type TenantSettingsRepository,
   type WorkflowRunRepository,
   createDbFromEnv,
 } from "@growthos/db";
-import { type LlmCallRunner, OpenAiLlmCallRunner } from "@growthos/llm-harness";
+import {
+  BufferedLlmCallLogSink,
+  ClickHouseLlmCallLogSink,
+  type LlmCallRunner,
+  OpenAiLlmCallRunner,
+} from "@growthos/llm-harness";
 import {
   createHttpMiddleware,
   createLogger,
@@ -34,6 +41,7 @@ import { createDigestRoutes } from "./routes/digest.js";
 import { createMotionRoutes } from "./routes/motion.js";
 import { createMotionsRoutes } from "./routes/motions.js";
 import { createPaperclipRoutes } from "./routes/paperclip.js";
+import { createSettingsRoutes } from "./routes/settings.js";
 import { createSignalRoutes } from "./routes/signals.js";
 import { createWorkflowRoutes } from "./routes/workflows.js";
 
@@ -48,6 +56,7 @@ export interface AppDependencies {
   signalEventsRepository?: SignalEventsRepository;
   approvalFeedbackRepository?: ApprovalFeedbackRepository;
   motionStackRepository?: MotionStackRepository;
+  tenantSettingsRepository?: TenantSettingsRepository;
   /**
    * Optional LLM runner for `POST /v1/signals/grade`. When omitted, resolves
    * from `OPENAI_API_KEY` via `OpenAiLlmCallRunner.fromEnv()`. Pass `null` in
@@ -138,12 +147,41 @@ const resolveMotionStackRepository = (
   return new PostgresMotionStackRepository(createDbFromEnv());
 };
 
+const resolveTenantSettingsRepository = (
+  deps: AppDependencies,
+): TenantSettingsRepository | null => {
+  if (deps.tenantSettingsRepository) return deps.tenantSettingsRepository;
+  if (!process.env.DATABASE_URL) return null;
+  return new PostgresTenantSettingsRepository(createDbFromEnv());
+};
+
+const resolveLogSink = ():
+  | BufferedLlmCallLogSink
+  | undefined => {
+  if (!process.env.CLICKHOUSE_URL && !process.env.CLICKHOUSE_HTTP_URL) {
+    return undefined;
+  }
+  try {
+    return new BufferedLlmCallLogSink({
+      sink: ClickHouseLlmCallLogSink.fromEnv(),
+      maxBatchSize: 50,
+      flushIntervalMs: 15_000,
+    });
+  } catch {
+    log.warn("ClickHouse log sink misconfigured — LLM calls will not be logged");
+    return undefined;
+  }
+};
+
 const resolveLlmCallRunner = (deps: AppDependencies): LlmCallRunner | null => {
   if (deps.llmCallRunner !== undefined) {
     return deps.llmCallRunner;
   }
   if (process.env.OPENAI_API_KEY) {
-    return OpenAiLlmCallRunner.fromEnv();
+    const logSink = resolveLogSink();
+    return OpenAiLlmCallRunner.fromEnv(
+      logSink !== undefined ? { logSink } : {},
+    );
   }
   return null;
 };
@@ -181,6 +219,11 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
   app.use("/v1/workflows/hello", requireToken);
   app.use("/v1/workflows/tenant-provisioning", requireToken);
   app.use("/v1/digest/send", requireToken);
+  // GET /v1/settings is public (non-sensitive UI prefs); PATCH requires token.
+  app.use("/v1/settings", async (c, next) => {
+    if (c.req.method === "PATCH") return requireToken(c, next);
+    return next();
+  });
 
   app.get("/health", (c) =>
     c.json({
@@ -239,6 +282,12 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
       approvalFeedbackRepository: resolveApprovalFeedbackRepository(deps),
       outboxRepository: resolveOutboxRepository(deps),
       motionStackRepository: resolveMotionStackRepository(deps),
+    }),
+  );
+  app.route(
+    "/v1/settings",
+    createSettingsRoutes({
+      tenantSettingsRepository: resolveTenantSettingsRepository(deps),
     }),
   );
 

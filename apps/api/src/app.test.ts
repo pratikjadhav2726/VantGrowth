@@ -6,6 +6,7 @@ import {
   InMemoryMotionStackRepository,
   InMemoryOutboxRepository,
   InMemorySignalEventsRepository,
+  InMemoryTenantSettingsRepository,
   InMemoryWorkflowRunRepository,
 } from "@growthos/db";
 import { StubLlmCallRunner } from "@growthos/llm-harness";
@@ -1479,6 +1480,124 @@ describe("API token auth", () => {
         Authorization: `Bearer ${apiServiceToken}`,
       },
       body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// /v1/settings
+// ---------------------------------------------------------------------------
+
+describe("/v1/settings", () => {
+  it("GET /v1/settings returns empty settings for new tenant", async () => {
+    const tenantSettingsRepository = new InMemoryTenantSettingsRepository();
+    const app = createApp({ tenantSettingsRepository });
+
+    const res = await app.request("http://localhost/v1/settings", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { tenantId: string; settings: Record<string, unknown> };
+    expect(body.tenantId).toBe(tenantId);
+    expect(body.settings).toEqual({});
+  });
+
+  it("PATCH /v1/settings persists settings and returns merged document", async () => {
+    const tenantSettingsRepository = new InMemoryTenantSettingsRepository();
+    const app = createApp({ tenantSettingsRepository });
+
+    const res = await app.request("http://localhost/v1/settings", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "X-Tenant-Id": tenantId },
+      body: JSON.stringify({ companyName: "Acme", digestEmail: "ceo@acme.io" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { settings: Record<string, unknown> };
+    expect(body.settings.companyName).toBe("Acme");
+    expect(body.settings.digestEmail).toBe("ceo@acme.io");
+  });
+
+  it("PATCH /v1/settings shallow-merges subsequent patches", async () => {
+    const tenantSettingsRepository = new InMemoryTenantSettingsRepository();
+    const app = createApp({ tenantSettingsRepository });
+
+    await app.request("http://localhost/v1/settings", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "X-Tenant-Id": tenantId },
+      body: JSON.stringify({ companyName: "Acme", logoUrl: "https://cdn.acme.io/logo.svg" }),
+    });
+    const res = await app.request("http://localhost/v1/settings", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "X-Tenant-Id": tenantId },
+      body: JSON.stringify({ digestEmail: "ceo@acme.io" }),
+    });
+
+    const body = (await res.json()) as { settings: Record<string, unknown> };
+    expect(body.settings.companyName).toBe("Acme");
+    expect(body.settings.logoUrl).toBe("https://cdn.acme.io/logo.svg");
+    expect(body.settings.digestEmail).toBe("ceo@acme.io");
+  });
+
+  it("GET /v1/settings reflects prior PATCH", async () => {
+    const tenantSettingsRepository = new InMemoryTenantSettingsRepository();
+    const app = createApp({ tenantSettingsRepository });
+
+    await app.request("http://localhost/v1/settings", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "X-Tenant-Id": tenantId },
+      body: JSON.stringify({ companyName: "Roundtrip" }),
+    });
+    const res = await app.request("http://localhost/v1/settings", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+
+    const body = (await res.json()) as { settings: Record<string, unknown> };
+    expect(body.settings.companyName).toBe("Roundtrip");
+  });
+
+  it("GET /v1/settings returns 400 when X-Tenant-Id is missing", async () => {
+    const app = createApp({ tenantSettingsRepository: new InMemoryTenantSettingsRepository() });
+    const res = await app.request("http://localhost/v1/settings");
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /v1/settings returns 503 when repository is not configured", async () => {
+    const app = createApp();
+    const res = await app.request("http://localhost/v1/settings", {
+      headers: { "X-Tenant-Id": tenantId },
+    });
+    expect(res.status).toBe(503);
+  });
+
+  it("PATCH /v1/settings returns 401 without token when apiServiceToken is set", async () => {
+    const apiServiceToken = "test-settings-token";
+    const app = createApp({
+      apiServiceToken,
+      tenantSettingsRepository: new InMemoryTenantSettingsRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/settings", {
+      method: "PATCH",
+      headers: { "content-type": "application/json", "X-Tenant-Id": tenantId },
+      body: JSON.stringify({ companyName: "Blocked" }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /v1/settings is public even when apiServiceToken is set", async () => {
+    const apiServiceToken = "test-settings-token";
+    const app = createApp({
+      apiServiceToken,
+      tenantSettingsRepository: new InMemoryTenantSettingsRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/settings", {
+      headers: { "X-Tenant-Id": tenantId },
     });
 
     expect(res.status).toBe(200);

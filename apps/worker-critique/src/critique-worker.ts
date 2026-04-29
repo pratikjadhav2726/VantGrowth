@@ -45,12 +45,22 @@ import {
 } from "./playbook-rubric.js";
 
 // ---------------------------------------------------------------------------
-// Verdict helpers
+// Verdict thresholds — overridable via env for per-deployment tuning
 // ---------------------------------------------------------------------------
 
+export const CRITIQUE_APPROVE_THRESHOLD = (() => {
+  const v = Number(process.env.CRITIQUE_APPROVE_THRESHOLD);
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.8;
+})();
+
+export const CRITIQUE_REVISE_THRESHOLD = (() => {
+  const v = Number(process.env.CRITIQUE_REVISE_THRESHOLD);
+  return Number.isFinite(v) && v > 0 && v < CRITIQUE_APPROVE_THRESHOLD ? v : 0.5;
+})();
+
 const verdictFromScore = (score: number): "approve" | "revise" | "reject" => {
-  if (score >= 0.8) return "approve";
-  if (score >= 0.5) return "revise";
+  if (score >= CRITIQUE_APPROVE_THRESHOLD) return "approve";
+  if (score >= CRITIQUE_REVISE_THRESHOLD) return "revise";
   return "reject";
 };
 

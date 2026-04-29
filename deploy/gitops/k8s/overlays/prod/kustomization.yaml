@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      environment: prod
+    includeSelectors: true
+
+# Production replica counts
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: growthos-api
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+    target:
+      kind: Deployment
+      name: growthos-web
+
+# Pin images via SHA digest — update via CI:
+#   kustomize edit set image \
+#     ghcr.io/your-org/growthos-api=ghcr.io/your-org/growthos-api@sha256:<digest>
+# images:
+#   - name: ghcr.io/your-org/growthos-api
+#     newTag: "<git-sha>"
+#   - name: ghcr.io/your-org/growthos-web
+#     newTag: "<git-sha>"

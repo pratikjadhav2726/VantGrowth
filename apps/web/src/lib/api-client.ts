@@ -290,6 +290,30 @@ export type SendDigestResponse = z.infer<typeof sendDigestResponseSchema>;
 export const getWeeklyDigest = (tenantId: string) =>
   apiFetch("/v1/digest/weekly", tenantId, { schema: weeklyMetricsSchema });
 
+// ---------------------------------------------------------------------------
+// Tenant settings
+// ---------------------------------------------------------------------------
+
+const settingsResponseSchema = z.object({
+  tenantId: z.string(),
+  settings: z.record(z.unknown()),
+});
+
+export const getSettings = (tenantId: string) =>
+  apiFetch("/v1/settings", tenantId, { schema: settingsResponseSchema });
+
+export const patchSettings = (
+  tenantId: string,
+  patch: Record<string, unknown>,
+  serviceToken: string,
+) =>
+  apiFetch("/v1/settings", tenantId, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+    headers: { Authorization: `Bearer ${serviceToken}` },
+    schema: settingsResponseSchema,
+  });
+
 export const sendFounderDigest = (
   tenantId: string,
   options?: { recipientEmail?: string },

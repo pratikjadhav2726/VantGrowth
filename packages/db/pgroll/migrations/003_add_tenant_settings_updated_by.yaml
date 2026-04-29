@@ -1,0 +1,35 @@
+# pgroll expand-contract: add updated_by audit column to tenant_settings.
+#
+# Adds a nullable `updated_by` text column to growthos.tenant_settings.
+# In prod this is populated by the API layer (actor kind + id, e.g.
+# "system" or "user:<userId>").  Existing rows get NULL — safe; the column
+# is nullable and the application writes it on every subsequent PATCH.
+#
+# Expand phase:
+#   - Old API pods write settings without updated_by — NULL is accepted.
+#   - New API pods write settings with updated_by populated.
+#   Both versions coexist during rolling deploy.
+#
+# After contracting:
+#   1. Update packages/db/src/schema.ts — add updatedBy: text("updated_by")
+#   2. Update PostgresTenantSettingsRepository.patch() to accept + write updatedBy
+#   3. pnpm --filter @growthos/db db:generate && pnpm --filter @growthos/db db:atlas-hash
+#   4. Commit schema.ts + generated SQL + atlas.sum
+#
+# Usage:
+#   PGROLL_MIGRATION_FILE=packages/db/pgroll/migrations/003_add_tenant_settings_updated_by.yaml \
+#     DATABASE_URL=postgresql://... pnpm migrate:expand
+#   # Deploy new code. Drain old pods.
+#   DATABASE_URL=postgresql://... pnpm migrate:contract
+
+name: 003_add_tenant_settings_updated_by
+operations:
+  - add_column:
+      table: tenant_settings
+      column:
+        name: updated_by
+        type: text
+        nullable: true
+        comment: "Actor that last patched this settings row (e.g. 'system' or 'user:<id>')."
+      up: "NULL"
+      down: null
