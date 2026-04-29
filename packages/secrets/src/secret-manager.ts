@@ -24,6 +24,7 @@
  */
 
 import { z } from "zod";
+import { VaultAppRoleAuth } from "./vault-approle-auth.js";
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -155,9 +156,16 @@ export interface VaultSecretManagerConfig {
   mountPath?: string;
   /**
    * Vault token for authentication.
-   * Reads from `VAULT_TOKEN` env var if not supplied.
+   *
+   * Accepts either:
+   *   - a static string (simple token auth / dev mode)
+   *   - an async resolver `() => Promise<string>` (AppRole, JWT, or any
+   *     dynamic auth method that manages its own token lifecycle)
+   *
+   * Use `VaultAppRoleAuth.getTokenResolver()` to obtain a resolver that
+   * handles AppRole login, caching, and renewal automatically.
    */
-  token: string;
+  token: string | (() => Promise<string>);
   /**
    * Request timeout in milliseconds.  Default: 5000.
    */
@@ -181,25 +189,49 @@ export interface VaultSecretManagerConfig {
 export class VaultSecretManager implements SecretManager {
   private readonly baseUrl: string;
   private readonly mountPath: string;
-  private readonly token: string;
+  private readonly tokenOrResolver: string | (() => Promise<string>);
   private readonly timeoutMs: number;
 
   constructor(config: VaultSecretManagerConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.mountPath = config.mountPath ?? "secret";
-    this.token = config.token;
+    this.tokenOrResolver = config.token;
     this.timeoutMs = config.timeoutMs ?? 5000;
   }
 
-  /** Factory: builds from environment variables. */
+  /**
+   * Factory: builds from environment variables.
+   *
+   * Auth method selection (in priority order):
+   *   1. AppRole — when VAULT_ROLE_ID + VAULT_SECRET_ID are both set.
+   *      Handles login, token caching, and renewal automatically.
+   *   2. Static token — when VAULT_TOKEN (or GROWTHOS_VAULT_TOKEN) is set.
+   *      Suitable for dev mode and root-token-based CI.
+   */
   static fromEnv(env: NodeJS.ProcessEnv = process.env): VaultSecretManager {
     const baseUrl = env.VAULT_ADDR ?? env.GROWTHOS_VAULT_ADDR;
-    const token = env.VAULT_TOKEN ?? env.GROWTHOS_VAULT_TOKEN;
     if (!baseUrl)
       throw new Error("VAULT_ADDR or GROWTHOS_VAULT_ADDR is required");
+
+    const roleId = env.VAULT_ROLE_ID ?? env.GROWTHOS_VAULT_ROLE_ID;
+    const secretId = env.VAULT_SECRET_ID ?? env.GROWTHOS_VAULT_SECRET_ID;
+    if (roleId && secretId) {
+      const auth = new VaultAppRoleAuth({ baseUrl, roleId, secretId });
+      return new VaultSecretManager({ baseUrl, token: auth.getTokenResolver() });
+    }
+
+    const token = env.VAULT_TOKEN ?? env.GROWTHOS_VAULT_TOKEN;
     if (!token)
-      throw new Error("VAULT_TOKEN or GROWTHOS_VAULT_TOKEN is required");
+      throw new Error(
+        "VAULT_TOKEN or GROWTHOS_VAULT_TOKEN is required when not using AppRole (VAULT_ROLE_ID + VAULT_SECRET_ID)",
+      );
     return new VaultSecretManager({ baseUrl, token });
+  }
+
+  private async resolveToken(): Promise<string> {
+    return typeof this.tokenOrResolver === "function"
+      ? this.tokenOrResolver()
+      : this.tokenOrResolver;
   }
 
   private dataUrl(path: SecretPath): string {
@@ -221,11 +253,12 @@ export class VaultSecretManager implements SecretManager {
     }, this.timeoutMs);
 
     try {
+      const token = await this.resolveToken();
       const res = await fetch(url, {
         method,
         signal: controller.signal,
         headers: {
-          "X-Vault-Token": this.token,
+          "X-Vault-Token": token,
           ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),

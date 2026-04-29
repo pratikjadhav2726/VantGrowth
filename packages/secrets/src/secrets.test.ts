@@ -5,6 +5,7 @@ import {
   secretPathSchema,
 } from "./secret-manager.js";
 import { TenantSecretsService } from "./tenant-secrets-service.js";
+import { VaultAppRoleAuth } from "./vault-approle-auth.js";
 
 const TENANT_ID = "00000000-0000-4000-8000-000000000001";
 
@@ -195,6 +196,251 @@ describe("VaultSecretManager", () => {
       VAULT_TOKEN: "test-token",
     });
     expect(manager).toBeInstanceOf(VaultSecretManager);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VaultAppRoleAuth
+// ---------------------------------------------------------------------------
+
+const makeLoginResponse = (overrides: Partial<{
+  client_token: string;
+  lease_duration: number;
+  renewable: boolean;
+}> = {}) => ({
+  auth: {
+    client_token: "s.approle-token-abc",
+    lease_duration: 3600,
+    renewable: true,
+    ...overrides,
+  },
+});
+
+const makeRenewResponse = (overrides: Partial<{
+  client_token: string;
+  lease_duration: number;
+  renewable: boolean;
+}> = {}) => ({
+  auth: {
+    client_token: "s.approle-token-abc",
+    lease_duration: 3600,
+    renewable: true,
+    ...overrides,
+  },
+});
+
+const makeAppRoleAuth = (overrides: Partial<ConstructorParameters<typeof VaultAppRoleAuth>[0]> = {}) =>
+  new VaultAppRoleAuth({
+    baseUrl: "http://localhost:8200",
+    roleId: "test-role-id",
+    secretId: "test-secret-id",
+    ...overrides,
+  });
+
+describe("VaultAppRoleAuth", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("performs AppRole login on first resolveToken() call", async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      status: 200,
+      json: async () => makeLoginResponse(),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const auth = makeAppRoleAuth();
+    const resolver = auth.getTokenResolver();
+    const token = await resolver();
+
+    expect(token).toBe("s.approle-token-abc");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/v1/auth/approle/login");
+    expect(JSON.parse(opts.body as string)).toMatchObject({
+      role_id: "test-role-id",
+      secret_id: "test-secret-id",
+    });
+  });
+
+  it("returns cached token on second call without re-logging in", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => makeLoginResponse({ lease_duration: 3600 }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const auth = makeAppRoleAuth();
+    const resolver = auth.getTokenResolver();
+    await resolver(); // first call — login
+    await resolver(); // second call — cached
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("renews token when within the renewal window (< 30% remaining)", async () => {
+    // 100s lease → renewalWindow = 30s. Advance 75s so remaining = 25s < 30s.
+    vi.useFakeTimers();
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        json: async () => makeLoginResponse({ lease_duration: 100 }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        json: async () => makeRenewResponse({ lease_duration: 3600 }),
+      });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const auth = makeAppRoleAuth();
+    const resolver = auth.getTokenResolver();
+    await resolver(); // login
+    vi.setSystemTime(Date.now() + 75_000); // advance 75s → 25s remaining < 30s window
+    const token = await resolver(); // within renewal window → renew
+
+    expect(token).toBe("s.approle-token-abc");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const [renewUrl] = mockFetch.mock.calls[1] as [string];
+    expect(renewUrl).toContain("/v1/auth/token/renew-self");
+    vi.useRealTimers();
+  });
+
+  it("re-logins when token renewal fails", async () => {
+    // 100s lease → renewalWindow = 30s. Advance 75s to enter window, then renewal 403 → re-login.
+    vi.useFakeTimers();
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        json: async () => makeLoginResponse({ lease_duration: 100 }),
+      })
+      .mockResolvedValueOnce({
+        // Renewal returns 403 (token was revoked)
+        status: 403,
+        json: async () => ({ errors: ["permission denied"] }),
+      })
+      .mockResolvedValueOnce({
+        // Re-login succeeds with new token
+        status: 200,
+        json: async () => makeLoginResponse({ client_token: "s.new-token", lease_duration: 3600 }),
+      });
+    vi.stubGlobal("fetch", mockFetch);
+
+    const auth = makeAppRoleAuth();
+    const resolver = auth.getTokenResolver();
+    await resolver(); // login
+    vi.setSystemTime(Date.now() + 75_000); // advance into renewal window
+    const token = await resolver(); // renewal fails → re-login
+
+    expect(token).toBe("s.new-token");
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
+  it("throws when AppRole login returns non-200", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        status: 400,
+        json: async () => ({ errors: ["invalid role_id"] }),
+      }),
+    );
+
+    const auth = makeAppRoleAuth();
+    const resolver = auth.getTokenResolver();
+    await expect(resolver()).rejects.toThrow("AppRole login failed");
+  });
+
+  it("fromEnv() throws when VAULT_ROLE_ID is missing", () => {
+    expect(() =>
+      VaultAppRoleAuth.fromEnv({
+        VAULT_ADDR: "http://localhost:8200",
+        VAULT_SECRET_ID: "sid",
+      }),
+    ).toThrow("VAULT_ROLE_ID");
+  });
+
+  it("fromEnv() constructs from env vars", () => {
+    const auth = VaultAppRoleAuth.fromEnv({
+      VAULT_ADDR: "http://openbao:8200",
+      VAULT_ROLE_ID: "role-abc",
+      VAULT_SECRET_ID: "secret-xyz",
+    });
+    expect(auth).toBeInstanceOf(VaultAppRoleAuth);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VaultSecretManager with token resolver
+// ---------------------------------------------------------------------------
+
+describe("VaultSecretManager — token resolver", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("calls the resolver function on each request rather than caching statically", async () => {
+    let callCount = 0;
+    const resolver = async () => {
+      callCount += 1;
+      return `token-${callCount}`;
+    };
+
+    const manager = new VaultSecretManager({
+      baseUrl: "http://localhost:8200",
+      token: resolver,
+    });
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({ data: { data: { value: "sk-secret" } } }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    await manager.get("tenants/abc/openai_api_key");
+    await manager.get("tenants/abc/openai_api_key");
+
+    // Resolver must have been called once per request.
+    expect(callCount).toBe(2);
+    const headers0 = (mockFetch.mock.calls[0] as [string, RequestInit])[1].headers as Record<string, string>;
+    const headers1 = (mockFetch.mock.calls[1] as [string, RequestInit])[1].headers as Record<string, string>;
+    expect(headers0["X-Vault-Token"]).toBe("token-1");
+    expect(headers1["X-Vault-Token"]).toBe("token-2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VaultSecretManager.fromEnv() — auth method selection
+// ---------------------------------------------------------------------------
+
+describe("VaultSecretManager.fromEnv() auth selection", () => {
+  it("uses AppRole when VAULT_ROLE_ID + VAULT_SECRET_ID are set", () => {
+    const manager = VaultSecretManager.fromEnv({
+      VAULT_ADDR: "http://localhost:8200",
+      VAULT_ROLE_ID: "role-abc",
+      VAULT_SECRET_ID: "secret-xyz",
+    });
+    expect(manager).toBeInstanceOf(VaultSecretManager);
+    // Token is a resolver function, not a static string.
+    // We can't directly inspect the private field so we just confirm it constructs.
+  });
+
+  it("uses static token when only VAULT_TOKEN is set", () => {
+    const manager = VaultSecretManager.fromEnv({
+      VAULT_ADDR: "http://localhost:8200",
+      VAULT_TOKEN: "s.root-dev-token",
+    });
+    expect(manager).toBeInstanceOf(VaultSecretManager);
+  });
+
+  it("throws when neither AppRole nor static token env vars are provided", () => {
+    expect(() =>
+      VaultSecretManager.fromEnv({ VAULT_ADDR: "http://localhost:8200" }),
+    ).toThrow("VAULT_TOKEN");
   });
 });
 
