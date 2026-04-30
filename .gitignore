@@ -10,6 +10,18 @@ dist/
 .turbo/
 coverage/
 *.tsbuildinfo
+.cache/
+tmp/
+temp/
+
+# Next.js / frontend build artifacts
+apps/web/.next/
+apps/web/next-env.d.ts
+out/
+
+# Test artifacts
+playwright-report/
+test-results/
 
 # Environment and local secrets
 .env
@@ -26,3 +38,4 @@ yarn-error.log*
 # Editor and IDE
 .idea/
 .vscode/
+.cursor/

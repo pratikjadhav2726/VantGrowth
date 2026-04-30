@@ -18,6 +18,8 @@ import {
   submitBrandStep,
   submitCompanyStep,
 } from "./actions";
+import { BrandStepForm } from "./brand-step-form";
+import { CompanyStepForm } from "./company-step-form";
 
 const DEV_TENANT_ID =
   process.env.GROWTHOS_DEV_TENANT_ID ?? "00000000-0000-0000-0001-000000000001";
@@ -91,114 +93,7 @@ function StepIndicator({ current }: { current: number }) {
 // ---------------------------------------------------------------------------
 
 function CompanyStep({ defaults }: { defaults: Record<string, string> }) {
-  return (
-    <form action={submitCompanyStep} className="space-y-5">
-      <div>
-        <label
-          className="block text-sm font-medium text-gray-700 mb-1.5"
-          htmlFor="companyName"
-        >
-          Company name <span className="text-red-500">*</span>
-        </label>
-        <input
-          id="companyName"
-          name="companyName"
-          type="text"
-          required
-          defaultValue={defaults.companyName}
-          placeholder="Acme GTM"
-          className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-        />
-      </div>
-
-      <div>
-        <label
-          className="block text-sm font-medium text-gray-700 mb-1.5"
-          htmlFor="website"
-        >
-          Website
-        </label>
-        <input
-          id="website"
-          name="website"
-          type="url"
-          defaultValue={defaults.website}
-          placeholder="https://acme.com"
-          className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-        />
-      </div>
-
-      <div>
-        <label
-          className="block text-sm font-medium text-gray-700 mb-1.5"
-          htmlFor="icpDescription"
-        >
-          Ideal customer profile (ICP) <span className="text-red-500">*</span>
-        </label>
-        <textarea
-          id="icpDescription"
-          name="icpDescription"
-          required
-          rows={3}
-          defaultValue={defaults.icpDescription}
-          placeholder="e.g. Series A–B SaaS companies with 20–200 employees, Head of Marketing as buyer, $500K–$5M ACV deals"
-          className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 resize-none"
-        />
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label
-            className="block text-sm font-medium text-gray-700 mb-1.5"
-            htmlFor="headcount"
-          >
-            Team size
-          </label>
-          <select
-            id="headcount"
-            name="headcount"
-            defaultValue={defaults.headcount ?? "11-50"}
-            className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-          >
-            <option value="1-10">1–10</option>
-            <option value="11-50">11–50</option>
-            <option value="51-200">51–200</option>
-            <option value="201-500">201–500</option>
-            <option value="500+">500+</option>
-          </select>
-        </div>
-        <div>
-          <label
-            className="block text-sm font-medium text-gray-700 mb-1.5"
-            htmlFor="arr"
-          >
-            Current ARR
-          </label>
-          <select
-            id="arr"
-            name="arr"
-            defaultValue={defaults.arr ?? "500k-2m"}
-            className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-          >
-            <option value="pre-revenue">Pre-revenue</option>
-            <option value="0-500k">$0–$500K</option>
-            <option value="500k-2m">$500K–$2M</option>
-            <option value="2m-10m">$2M–$10M</option>
-            <option value="10m+">$10M+</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="pt-2">
-        <button
-          type="submit"
-          className="w-full rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 transition-colors"
-        >
-          Continue →
-        </button>
-      </div>
-    </form>
-  );
+  return <CompanyStepForm defaults={defaults} submitAction={submitCompanyStep} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,104 +101,7 @@ function CompanyStep({ defaults }: { defaults: Record<string, string> }) {
 // ---------------------------------------------------------------------------
 
 function BrandStep({ defaults }: { defaults: Record<string, string> }) {
-  return (
-    <form action={submitBrandStep} className="space-y-5">
-      <div>
-        <label
-          className="block text-sm font-medium text-gray-700 mb-1.5"
-          htmlFor="positioning"
-        >
-          One-sentence positioning <span className="text-red-500">*</span>
-        </label>
-        <textarea
-          id="positioning"
-          name="positioning"
-          required
-          rows={2}
-          defaultValue={defaults.positioning}
-          placeholder="e.g. GrowthOS turns founder expertise into a scalable GTM content engine that publishes every day without adding headcount."
-          className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 resize-none"
-        />
-      </div>
-
-      <fieldset>
-        <legend className="block text-sm font-medium text-gray-700 mb-1.5">
-          Top 3 proof points
-        </legend>
-        <div className="space-y-2">
-          {[1, 2, 3].map((n) => (
-            <input
-              key={n}
-              name={`proof${n}`}
-              type="text"
-              defaultValue={(defaults as Record<string, string>)[`proof${n}`]}
-              placeholder={
-                n === 1
-                  ? "e.g. Customers see 3× more content in 30 days"
-                  : n === 2
-                    ? "e.g. Average 94% approval rate, first pass"
-                    : "e.g. Deployed by 50+ series A/B companies"
-              }
-              className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-            />
-          ))}
-        </div>
-      </fieldset>
-
-      <div>
-        <label
-          className="block text-sm font-medium text-gray-700 mb-1.5"
-          htmlFor="tone"
-        >
-          Communication tone
-        </label>
-        <select
-          id="tone"
-          name="tone"
-          defaultValue={defaults.tone ?? "founder-voice"}
-          className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-        >
-          <option value="founder-voice">
-            Founder voice (direct, opinionated)
-          </option>
-          <option value="professional">
-            Professional (structured, formal)
-          </option>
-          <option value="conversational">
-            Conversational (warm, approachable)
-          </option>
-          <option value="technical">Technical (precise, detail-rich)</option>
-        </select>
-      </div>
-
-      <div>
-        <label
-          className="block text-sm font-medium text-gray-700 mb-1.5"
-          htmlFor="wordsToAvoid"
-        >
-          Words / phrases to avoid
-        </label>
-        <input
-          id="wordsToAvoid"
-          name="wordsToAvoid"
-          type="text"
-          defaultValue={defaults.wordsToAvoid}
-          placeholder="e.g. revolutionary, disruptive, synergy"
-          className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-        />
-        <p className="mt-1 text-xs text-gray-400">Comma-separated list</p>
-      </div>
-
-      <div className="pt-2">
-        <button
-          type="submit"
-          className="w-full rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 transition-colors"
-        >
-          Continue →
-        </button>
-      </div>
-    </form>
-  );
+  return <BrandStepForm defaults={defaults} submitAction={submitBrandStep} />;
 }
 
 // ---------------------------------------------------------------------------

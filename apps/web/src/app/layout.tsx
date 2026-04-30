@@ -1,4 +1,5 @@
 import { getSession } from "@/lib/auth-session";
+import { getSystemStatus } from "@/lib/system-status";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { logoutAction } from "./login/actions";
@@ -22,6 +23,9 @@ export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const session = await getSession();
+  const systemStatus = await getSystemStatus();
+  const showPaperclipWarning =
+    systemStatus?.paperclip.required && !systemStatus.paperclip.connected;
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -81,6 +85,13 @@ export default async function RootLayout({
 
         {/* ── Main content ─────────────────────────────────────────────── */}
         <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+          {showPaperclipWarning && (
+            <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Paperclip is required but not connected. Set{" "}
+              <code>PAPERCLIP_BASE_URL</code> and{" "}
+              <code>PAPERCLIP_SERVICE_TOKEN</code> in API env.
+            </div>
+          )}
           {children}
         </main>
       </body>

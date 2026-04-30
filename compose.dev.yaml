@@ -1,0 +1,274 @@
+# GrowthOS — local development stack
+#
+# Runs the full infra + the API and Web app with hot-reload.
+#
+# Quick start:
+#   cp .env.example .env          # edit OPENAI_API_KEY if you want LLM features
+#   docker compose -f compose.dev.yaml up --build
+#
+# First run only (runs automatically via the `migrate` service):
+#   The Drizzle migrations + dev seed execute before the API starts.
+#
+# Ports exposed to localhost:
+#   API   → http://localhost:3001
+#   Web   → http://localhost:3000
+#   Postgres → localhost:5432
+#   NATS     → localhost:4222 / monitoring 8222
+#   ClickHouse → localhost:8123 (HTTP)
+#   MinIO console → http://localhost:9001
+#   OpenBao (Vault-compat) → http://localhost:8200
+#   Gitea  → http://localhost:3088
+#
+# Packages are installed from the host pnpm-lock.yaml and the host
+# node_modules are NOT mounted — the container has its own pnpm store
+# to stay hermetic. Source files are mounted for hot-reload.
+
+name: growthos-dev
+
+x-env: &env
+  env_file: .env
+
+services:
+
+  # ── Infrastructure ───────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: growthos_ci
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d growthos_ci"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+    volumes:
+      - growthos-dev-postgres:/var/lib/postgresql/data
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz | grep -q ok"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - growthos-dev-nats:/data
+
+  jetstream-init:
+    image: natsio/nats-box:0.14.5
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        for i in $(seq 1 30); do
+          if nats --server "nats://nats:4222" stream info GROWTHOS >/dev/null 2>&1; then
+            echo "stream GROWTHOS exists"; exit 0
+          fi
+          if nats --server "nats://nats:4222" stream add GROWTHOS --subjects "t.>" --defaults 2>/dev/null; then
+            echo "created stream GROWTHOS"; exit 0
+          fi
+          sleep 1
+        done
+        echo "timed out" && exit 1
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    environment:
+      CLICKHOUSE_DB: growthos
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:8123/ping' | grep -q Ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - growthos-dev-clickhouse:/var/lib/clickhouse
+      - ./packages/db/clickhouse:/docker-entrypoint-initdb.d:ro
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local 2>/dev/null || wget -qO- http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - growthos-dev-minio:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mc alias set local http://minio:9000 minio miniosecret
+        mc mb local/growthos --ignore-existing
+        mc mb local/growthos-assets --ignore-existing
+        echo "MinIO buckets ready."
+
+  openbao:
+    image: openbao/openbao:2.2.0
+    cap_add:
+      - IPC_LOCK
+    command: server -dev -dev-root-token-id=growthos-dev-root-token -dev-listen-address=0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: growthos-dev-root-token
+      BAO_ADDR: http://0.0.0.0:8200
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8200/v1/sys/health | grep -q '\"initialized\":true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  gitea:
+    image: gitea/gitea:1.22-rootless
+    environment:
+      GITEA__APP_NAME: "GrowthOS Dev"
+      GITEA__SERVER__HTTP_PORT: "3000"
+      GITEA__SERVER__DOMAIN: "localhost"
+      GITEA__SERVER__ROOT_URL: "http://localhost:3088/"
+      GITEA__DATABASE__DB_TYPE: sqlite3
+      GITEA__SECURITY__INSTALL_LOCK: "true"
+      GITEA__SECURITY__SECRET_KEY: "growthos-dev-secret-key-change-in-prod"
+      GITEA__SECURITY__INTERNAL_TOKEN: "growthos-dev-internal-token-change-in-prod"
+    ports:
+      - "3088:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:3000/api/healthz' | grep -q '\"status\": \"pass\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    volumes:
+      - growthos-dev-gitea:/var/lib/gitea
+      - growthos-dev-gitea-config:/etc/gitea
+
+  # ── Database migration + seed (runs once before API starts) ──────────────────
+
+  migrate:
+    image: node:22-bookworm-slim
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      GROWTHOS_DEV_TENANT_ID: ${GROWTHOS_DEV_TENANT_ID:-00000000-0000-0000-0001-000000000001}
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - migrate-pnpm-store:/pnpm
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        export PNPM_HOME=/pnpm
+        export PATH="$PNPM_HOME:$PATH"
+        corepack enable && corepack prepare pnpm@10.17.0 --activate
+        pnpm install --frozen-lockfile --prefer-offline 2>/dev/null || pnpm install --frozen-lockfile
+        echo "▶ Running migrations..."
+        pnpm migrate:dry-run
+        echo "▶ Seeding dev tenant..."
+        pnpm seed:dev
+        echo "✓ Database ready."
+
+  # ── Application services ─────────────────────────────────────────────────────
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      CLICKHOUSE_URL: http://clickhouse:8123
+      MINIO_ENDPOINT: http://minio:9000
+      VAULT_ADDR: http://openbao:8200
+      NODE_ENV: development
+      PORT: "3001"
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./apps/api/src:/app/apps/api/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health | grep -q '\"ok\":true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.dev.Dockerfile
+    <<: *env
+    environment:
+      GROWTHOS_API_BASE_URL: http://api:3001
+      NEXT_PUBLIC_GROWTHOS_API_BASE_URL: http://localhost:3001
+      NODE_ENV: development
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/web/src:/app/apps/web/src:ro
+      - ./apps/web/public:/app/apps/web/public:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  growthos-dev-postgres:
+  growthos-dev-nats:
+  growthos-dev-clickhouse:
+  growthos-dev-minio:
+  growthos-dev-gitea:
+  growthos-dev-gitea-config:
+  migrate-pnpm-store:

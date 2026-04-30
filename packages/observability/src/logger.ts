@@ -42,20 +42,35 @@ export const createLogger = (
     (opts.pretty ?? process.env.NODE_ENV !== "production") &&
     process.env.NODE_ENV !== "test";
 
-  return pino({
+  const baseConfig: pino.LoggerOptions = {
     base: { service },
     level,
     timestamp: pino.stdTimeFunctions.isoTime,
     formatters: {
       level: (label) => ({ level: label }),
     },
-    ...(pretty
-      ? {
-          transport: {
-            target: "pino-pretty",
-            options: { colorize: true, ignore: "pid,hostname" },
-          },
-        }
-      : {}),
-  });
+  };
+
+  if (!pretty) {
+    return pino(baseConfig);
+  }
+
+  try {
+    return pino({
+      ...baseConfig,
+      transport: {
+        target: "pino-pretty",
+        options: { colorize: true, ignore: "pid,hostname" },
+      },
+    });
+  } catch (error) {
+    // In slim/container images pino-pretty may be intentionally omitted.
+    if (
+      error instanceof Error &&
+      error.message.includes("unable to determine transport target")
+    ) {
+      return pino(baseConfig);
+    }
+    throw error;
+  }
 };

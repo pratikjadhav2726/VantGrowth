@@ -188,6 +188,14 @@ const resolveLlmCallRunner = (deps: AppDependencies): LlmCallRunner | null => {
 
 export const createApp = (deps: AppDependencies = {}): Hono => {
   const app = new Hono();
+  const paperclipClient = resolvePaperclipClient(deps);
+  const paperclipRequired = process.env.GROWTHOS_REQUIRE_PAPERCLIP === "true";
+  const paperclipConnected = paperclipClient !== null;
+  const paperclipStatus = paperclipConnected
+    ? "connected"
+    : paperclipRequired
+      ? "required_but_disconnected"
+      : "optional_disconnected";
 
   // ── Observability middleware (spans + metrics on every request) ────────────
   // No-op when OTel SDK has not been initialised (unit tests, local dev).
@@ -227,9 +235,26 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
 
   app.get("/health", (c) =>
     c.json({
-      ok: true,
+      ok: !paperclipRequired || paperclipConnected,
       service: "@growthos/api",
       version: process.env.npm_package_version ?? "0.1.0",
+      dependencies: {
+        paperclip: {
+          required: paperclipRequired,
+          connected: paperclipConnected,
+          status: paperclipStatus,
+        },
+      },
+    }),
+  );
+
+  app.get("/v1/system/status", (c) =>
+    c.json({
+      paperclip: {
+        required: paperclipRequired,
+        connected: paperclipConnected,
+        status: paperclipStatus,
+      },
     }),
   );
 
@@ -245,7 +270,7 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
   );
   app.route(
     "/v1/paperclip",
-    createPaperclipRoutes({ paperclipClient: resolvePaperclipClient(deps) }),
+    createPaperclipRoutes({ paperclipClient }),
   );
   app.route(
     "/v1/workflows",

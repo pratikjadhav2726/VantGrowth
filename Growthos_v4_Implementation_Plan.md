@@ -113,7 +113,7 @@ Each phase has a sharp exit criterion. Do not begin the next phase until the cur
 
 This section tracks what is already implemented in the `GTM` repo so execution status is explicit and not inferred from architecture docs.
 
-**Last updated:** 2026-04-28
+**Last updated:** 2026-04-30
 
 ### Progress dashboard (implementation status)
 
@@ -133,6 +133,12 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 
 ### Completed in code (this repo)
 
+- **Open-source repo readiness**
+  - Root `README.md` rewritten for external onboarding clarity: clear product description, quick-start paths (`pnpm` and Docker), key endpoints, and architecture/doc pointers.
+  - Added explicit **Paperclip integration status** section explaining that fork usage is currently env-gated (`PAPERCLIP_BASE_URL`, `PAPERCLIP_SERVICE_TOKEN`) and where the integration is implemented (`/v1/paperclip/bootstrap-tenant`, provisioning orchestrator, adapter package).
+  - Added strict integration mode: `GROWTHOS_REQUIRE_PAPERCLIP=true` marks API health as unhealthy when Paperclip is disconnected and surfaces a warning banner in web layout.
+  - Added onboarding UX note to docs: Step 1 + Step 2 forms now run live, pre-submit validation for all fields with disabled-continue until valid.
+
 - **Phase 0 / Track A (Repo + tooling)**
   - Monorepo scaffolded with `pnpm`, `turbo`, `typescript`, `biome`, `vitest`.
   - Packages created: `@growthos/core`, `@growthos/api`, `@growthos/adapter`, `@growthos/skills`, `@growthos/design-system`, `@growthos/test-utils`.
@@ -146,6 +152,10 @@ This section tracks what is already implemented in the `GTM` repo so execution s
   - **`OutboxPublisher`** (`worker-outbox-publisher`) traces production drain path: `publishCycle` → `outbox.publish_cycle` span (SERVER kind, `tenant.count` + `total_published` attrs); `publishPendingForTenant` → `outbox.drain_tenant` span (`tenant.id` + `published_count` attrs). Metrics: `outbox.events.published.total` counter (per-tenant label) and `outbox.cycle.duration_ms` histogram. All OTel primitives re-exported from `@growthos/observability` so no direct `@opentelemetry/api` dep needed in consumers.
   - **Generated RLS invariant test suite** (`packages/db/src/rls-test-generator.ts` + `src/rls-invariants.test.ts`): `RlsTableSpec` interface + `generateRlsInvariantCases()` derive three invariant cases per tenant-scoped table (owner reads own rows, other tenant blocked, no-context returns zero under FORCE RLS). `GROWTHOS_RLS_TABLE_SPECS` covers all 5 tables; adding a table requires one spec entry. Tests use dedicated `pg.Client` instances per role (owner / other / anon), run only when `DATABASE_URL` is set (`describe.skipIf`), and clean up via RLS-safe DELETE in `afterAll`.
   - **Local Docker Compose** upgraded: **OpenBao 2.2** (`openbao/openbao:2.2.0`) added on port **8200** in dev mode (root token `growthos-dev-root-token`, in-memory, Vault-compatible API). Completes the Track B infra coverage: all 8 services live.
+  - **Docker dev reliability fix**: `compose.dev.yaml` `minio-init` image moved from a removed pinned tag (`minio/mc:RELEASE.2024-12-17T17-25-30Z`) to `minio/mc:latest` so local `docker compose -f compose.dev.yaml up --build` can resolve and bootstrap MinIO buckets reliably.
+  - **Docker dev bootstrap fix**: added missing `docker/api.dev.Dockerfile` and `docker/web.dev.Dockerfile` so `compose.dev.yaml` can build/run app services in containerized development mode (API via `tsx watch`, Web via `next dev` on `0.0.0.0:3000`).
+  - **Container logging compatibility**: `@growthos/observability` logger now falls back to standard pino output when `pino-pretty` transport is unavailable in minimal/dev images, preventing API boot failures in Compose.
+  - **Compose healthcheck hardening**: `compose.dev.yaml` healthchecks now use stable probes (`127.0.0.1` for OpenBao IPv4 binding and JSON-status grep for Gitea), and `docker/api.dev.Dockerfile` includes `wget` for the API health probe.
   - **pgroll expand–contract workflow** added to `packages/db/pgroll/`: `WORKFLOW.md` (3-phase diagram, decision table for when pgroll vs plain Drizzle, step-by-step procedure, troubleshooting table); `migrations/001_add_quality_score_to_motion_scores.yaml` (additive column with backfill); `migrations/002_rename_rationale_to_scorer_rationale.yaml` (zero-downtime rename). Root scripts: `migrate:expand` (wraps `pgroll start`), `migrate:contract` (wraps `pgroll complete`), `migrate:rollback`, `migrate:status`.
   - **RLS invariant tests wired into CI**: new `rls-invariants` job in `.github/workflows/ci.yml` with Postgres 16 service, applies migration via `migrate:dry-run`, then runs `pnpm --filter @growthos/db test` with `DATABASE_URL` set — all 15 generated cases run on every PR per Phase 0 exit criterion.
   - **Operational runbooks** added (`docs/runbooks/`): `nats-leader-loss.md` (detection, Compose vs prod recovery, outbox catch-up, post-incident checklist); `postgres-failover.md` (Patroni auto vs manual promote, RLS verification, replica rejoin); `openbao-seal-unseal.md` (Shamir key-share procedure, KMS auto-unseal, emergency seal, post-incident).
