@@ -125,3 +125,8 @@ CI runs on PR/push:
 - Implementation status: `Growthos_v4_Implementation_Plan.md`
 - Paperclip integration notes: `paperclip_guide.md`
 - Container images: `docker/README.md`
+- User guide: `docs/USER_GUIDE.md`
+- Contributing: `CONTRIBUTING.md`
+- Security policy: `SECURITY.md`
+- Code of conduct: `CODE_OF_CONDUCT.md`
+- Open-source checklist: `docs/OPEN_SOURCE_CHECKLIST.md`

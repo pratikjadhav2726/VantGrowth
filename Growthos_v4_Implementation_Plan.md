@@ -138,6 +138,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
   - Added explicit **Paperclip integration status** section explaining that fork usage is currently env-gated (`PAPERCLIP_BASE_URL`, `PAPERCLIP_SERVICE_TOKEN`) and where the integration is implemented (`/v1/paperclip/bootstrap-tenant`, provisioning orchestrator, adapter package).
   - Added strict integration mode: `GROWTHOS_REQUIRE_PAPERCLIP=true` marks API health as unhealthy when Paperclip is disconnected and surfaces a warning banner in web layout.
   - Added onboarding UX note to docs: Step 1 + Step 2 forms now run live, pre-submit validation for all fields with disabled-continue until valid.
+  - Added open-source community docs: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `LICENSE`, `docs/USER_GUIDE.md`, and `docs/OPEN_SOURCE_CHECKLIST.md` with README links.
 
 - **Phase 0 / Track A (Repo + tooling)**
   - Monorepo scaffolded with `pnpm`, `turbo`, `typescript`, `biome`, `vitest`.
