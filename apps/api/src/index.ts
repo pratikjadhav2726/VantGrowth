@@ -1,41 +1,28 @@
+/**
+ * GrowthOS API server entrypoint.
+ *
+ * Bootstraps the OTel SDK **before** any application code loads so that
+ * TracerProvider / MeterProvider are registered by the time routes execute.
+ * When OTEL_EXPORTER_OTLP_ENDPOINT is unset the SDK runs in no-op mode.
+ */
+import { initOtelSdk } from "@growthos/observability";
+
+// Must be the first side-effect in the process.
+const otel = initOtelSdk({ serviceName: "growthos.api" });
+
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
-import { eventOutboxCommandSchema, motionScoringInputSchema, scoreMotions } from "@growthos/core";
+import { createApp, log } from "./app.js";
 
-const app = new Hono();
+const app = createApp();
+const port = Number(process.env.PORT ?? 3001);
 
-app.get("/health", (c) =>
-  c.json({
-    ok: true,
-    service: "@growthos/api"
-  })
-);
-
-app.post("/v1/motions/score", async (c) => {
-  const payload = motionScoringInputSchema.parse(await c.req.json());
-  const result = scoreMotions(payload);
-  return c.json(result, 202);
+serve({ fetch: app.fetch, port }, () => {
+  log.info({ port }, "@growthos/api listening");
 });
 
-app.post("/v1/commands/outbox", async (c) => {
-  const payload = eventOutboxCommandSchema.parse(await c.req.json());
-
-  // This endpoint models async-by-default behavior: accept command, return tracking handle.
-  return c.json(
-    {
-      accepted: true,
-      trackingId: `${payload.tenantId}:${payload.idempotencyKey}`,
-      enqueuedAt: new Date().toISOString()
-    },
-    202
-  );
+process.on("SIGINT", () => {
+  otel
+    .shutdown()
+    .catch(console.error)
+    .finally(() => process.exit(0));
 });
-
-serve(
-  {
-    fetch: app.fetch,
-    port: Number(process.env.PORT ?? 3001)
-  }
-);
-
-console.log("@growthos/api listening on 3001 (default)");

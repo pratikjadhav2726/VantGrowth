@@ -1,0 +1,3 @@
+# Atlas migration checksums are sensitive to line endings; keep Drizzle SQL LF in the repo.
+packages/db/drizzle/*.sql text eol=lf
+packages/db/drizzle/atlas.sum text eol=lf

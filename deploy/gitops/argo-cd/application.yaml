@@ -1,0 +1,24 @@
+# Argo CD Application — points at this repository’s Kustomize overlay.
+# Replace spec.source.repoURL with your fork before applying.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: growthos-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/your-org/GTM.git
+    targetRevision: main
+    path: deploy/gitops/k8s/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: growthos
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

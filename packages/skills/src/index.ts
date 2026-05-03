@@ -6,7 +6,7 @@ export const skillFrontmatterSchema = z.object({
   version: z.number().int().positive(),
   compatible_agents: z.array(z.string().min(1)),
   required_memory: z.array(z.string().min(1)),
-  output_schemas: z.array(z.string().min(1))
+  output_schemas: z.array(z.string().min(1)),
 });
 
 export type SkillFrontmatter = z.infer<typeof skillFrontmatterSchema>;
@@ -52,7 +52,7 @@ export const parseSkillMarkdown = (content: string): ParsedSkill => {
 
   return {
     frontmatter: skillFrontmatterSchema.parse(parsed),
-    body
+    body,
   };
 };
 

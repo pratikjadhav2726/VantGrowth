@@ -4,7 +4,7 @@ export const adapterRunContextSchema = z.object({
   tenantId: z.string().min(1),
   paperclipRunId: z.string().min(1),
   agentId: z.string().min(1),
-  issueId: z.string().min(1)
+  issueId: z.string().min(1),
 });
 
 export type AdapterRunContext = z.infer<typeof adapterRunContextSchema>;
@@ -20,10 +20,229 @@ export interface AdapterPort {
   enqueueOutbox(command: EventOutboxCommand): Promise<{ trackingId: string }>;
 }
 
+const paperclipClientConfigSchema = z.object({
+  baseUrl: z.string().url(),
+  serviceToken: z.string().min(1),
+  timeoutMs: z.number().int().positive().default(15_000),
+});
+
+export type PaperclipClientConfig = z.infer<typeof paperclipClientConfigSchema>;
+
+export const paperclipEnvSchema = z.object({
+  PAPERCLIP_BASE_URL: z.string().url(),
+  PAPERCLIP_SERVICE_TOKEN: z.string().min(1),
+  PAPERCLIP_TIMEOUT_MS: z.string().regex(/^\d+$/).optional(),
+});
+
+export const paperclipConfigFromEnv = (
+  env: Record<string, string | undefined>,
+): PaperclipClientConfig => {
+  const parsed = paperclipEnvSchema.parse(env);
+  return paperclipClientConfigSchema.parse({
+    baseUrl: parsed.PAPERCLIP_BASE_URL,
+    serviceToken: parsed.PAPERCLIP_SERVICE_TOKEN,
+    timeoutMs: parsed.PAPERCLIP_TIMEOUT_MS
+      ? Number(parsed.PAPERCLIP_TIMEOUT_MS)
+      : 15_000,
+  });
+};
+
+export const paperclipCompanyCreateInputSchema = z.object({
+  externalId: z.string().min(1),
+  name: z.string().min(1),
+  metadata: z.record(z.unknown()).optional(),
+});
+export type PaperclipCompanyCreateInput = z.infer<
+  typeof paperclipCompanyCreateInputSchema
+>;
+
+export const paperclipCompanySchema = z.object({
+  id: z.string().min(1),
+  identifier: z.string().min(1),
+});
+export type PaperclipCompany = z.infer<typeof paperclipCompanySchema>;
+
+export const paperclipAgentCreateInputSchema = z.object({
+  companyId: z.string().min(1),
+  name: z.string().min(1),
+  role: z.string().min(1),
+  title: z.string().min(1),
+  adapterType: z.literal("growthos_native"),
+  budgetMonthlyCents: z.number().int().nonnegative(),
+  capabilities: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+export type PaperclipAgentCreateInput = z.infer<
+  typeof paperclipAgentCreateInputSchema
+>;
+
+export const paperclipAgentSchema = z.object({
+  id: z.string().min(1),
+  identifier: z.string().min(1).optional(),
+  name: z.string().min(1),
+});
+export type PaperclipAgent = z.infer<typeof paperclipAgentSchema>;
+
+export const paperclipIssueCreateInputSchema = z.object({
+  companyId: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  status: z.string().default("todo"),
+  priority: z.string().default("medium"),
+  assigneeAgentId: z.string().min(1),
+  metadata: z.record(z.unknown()).optional(),
+});
+export type PaperclipIssueCreateInput = z.input<
+  typeof paperclipIssueCreateInputSchema
+>;
+
+export const paperclipIssueSchema = z.object({
+  id: z.string().min(1),
+  identifier: z.string().min(1),
+  title: z.string().min(1),
+  status: z.string().min(1),
+});
+export type PaperclipIssue = z.infer<typeof paperclipIssueSchema>;
+
+export const paperclipCheckoutInputSchema = z.object({
+  issueId: z.string().min(1),
+  agentId: z.string().min(1),
+  expectedStatuses: z
+    .array(z.string().min(1))
+    .default(["todo", "backlog", "blocked", "in_review"]),
+  runId: z.string().optional(),
+});
+export type PaperclipCheckoutInput = z.input<
+  typeof paperclipCheckoutInputSchema
+>;
+
+export const paperclipWakeupInputSchema = z.object({
+  agentId: z.string().min(1),
+  source: z.string().min(1),
+  triggerDetail: z.string().optional(),
+  reason: z.string().min(1),
+  payload: z.record(z.unknown()).optional(),
+  idempotencyKey: z.string().min(1),
+});
+export type PaperclipWakeupInput = z.input<typeof paperclipWakeupInputSchema>;
+
+export interface PaperclipClientPort {
+  createCompany(input: PaperclipCompanyCreateInput): Promise<PaperclipCompany>;
+  createAgent(input: PaperclipAgentCreateInput): Promise<PaperclipAgent>;
+  createIssue(input: PaperclipIssueCreateInput): Promise<PaperclipIssue>;
+  checkoutIssue(input: PaperclipCheckoutInput): Promise<PaperclipIssue>;
+  releaseIssue(issueId: string): Promise<void>;
+  wakeupAgent(input: PaperclipWakeupInput): Promise<void>;
+}
+
+const asJson = async (response: Response): Promise<unknown> => {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) return {};
+  return response.json();
+};
+
+export class PaperclipClient implements PaperclipClientPort {
+  constructor(
+    private readonly config: PaperclipClientConfig,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {
+    this.config = paperclipClientConfigSchema.parse(config);
+  }
+
+  async createCompany(
+    input: PaperclipCompanyCreateInput,
+  ): Promise<PaperclipCompany> {
+    const body = paperclipCompanyCreateInputSchema.parse(input);
+    const result = await this.request("POST", "/api/companies", body);
+    return paperclipCompanySchema.parse(result);
+  }
+
+  async createAgent(input: PaperclipAgentCreateInput): Promise<PaperclipAgent> {
+    const body = paperclipAgentCreateInputSchema.parse(input);
+    const result = await this.request(
+      "POST",
+      `/api/companies/${body.companyId}/agents`,
+      body,
+    );
+    return paperclipAgentSchema.parse(result);
+  }
+
+  async createIssue(input: PaperclipIssueCreateInput): Promise<PaperclipIssue> {
+    const body = paperclipIssueCreateInputSchema.parse(input);
+    const result = await this.request(
+      "POST",
+      `/api/companies/${body.companyId}/issues`,
+      body,
+    );
+    return paperclipIssueSchema.parse(result);
+  }
+
+  async checkoutIssue(input: PaperclipCheckoutInput): Promise<PaperclipIssue> {
+    const body = paperclipCheckoutInputSchema.parse(input);
+    const result = await this.request(
+      "POST",
+      `/api/issues/${body.issueId}/checkout`,
+      {
+        agentId: body.agentId,
+        expectedStatuses: body.expectedStatuses,
+      },
+      body.runId ? { "X-Paperclip-Run-Id": body.runId } : undefined,
+    );
+    return paperclipIssueSchema.parse(result);
+  }
+
+  async releaseIssue(issueId: string): Promise<void> {
+    const parsedIssueId = z.string().min(1).parse(issueId);
+    await this.request("POST", `/api/issues/${parsedIssueId}/release`);
+  }
+
+  async wakeupAgent(input: PaperclipWakeupInput): Promise<void> {
+    const body = paperclipWakeupInputSchema.parse(input);
+    await this.request("POST", `/api/agents/${body.agentId}/wakeup`, body);
+  }
+
+  private async request(
+    method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
+    path: string,
+    body?: unknown,
+    headers?: Record<string, string>,
+  ): Promise<unknown> {
+    const url = new URL(path, this.config.baseUrl);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
+
+    try {
+      const response = await this.fetchImpl(url.toString(), {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.config.serviceToken}`,
+          "Content-Type": "application/json",
+          ...headers,
+        },
+        body: body ? JSON.stringify(body) : null,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const payload = await asJson(response);
+        throw new Error(
+          `Paperclip request failed ${response.status} ${response.statusText}: ${JSON.stringify(payload)}`,
+        );
+      }
+
+      return asJson(response);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export class GrowthosNativeAdapter {
   constructor(private readonly port: AdapterPort) {}
 
-  async emitRunStarted(context: AdapterRunContext): Promise<{ trackingId: string }> {
+  async emitRunStarted(
+    context: AdapterRunContext,
+  ): Promise<{ trackingId: string }> {
     const parsed = adapterRunContextSchema.parse(context);
 
     return this.port.enqueueOutbox({
@@ -33,8 +252,8 @@ export class GrowthosNativeAdapter {
       payload: {
         run_id: parsed.paperclipRunId,
         agent_id: parsed.agentId,
-        issue_id: parsed.issueId
-      }
+        issue_id: parsed.issueId,
+      },
     });
   }
 }

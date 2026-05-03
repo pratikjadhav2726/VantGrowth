@@ -1,0 +1,29 @@
+# pgroll expand-contract example: adding a non-nullable column with a backfill.
+#
+# This migration adds `quality_score` to growthos.motion_scores.
+# Existing rows are backfilled with 0.500 (neutral quality score).
+#
+# Usage:
+#   PGROLL_MIGRATION_FILE=packages/db/pgroll/migrations/001_add_quality_score_to_motion_scores.yaml \
+#     DATABASE_URL=postgresql://... pnpm migrate:expand
+#   # ... deploy and drain old pods ...
+#   DATABASE_URL=postgresql://... pnpm migrate:contract
+#
+# After contracting, update packages/db/src/schema.ts and run:
+#   pnpm --filter @growthos/db db:generate && pnpm --filter @growthos/db db:atlas-hash
+
+name: 001_add_quality_score_to_motion_scores
+operations:
+  - add_column:
+      table: motion_scores
+      column:
+        name: quality_score
+        type: numeric(4, 3)
+        nullable: true
+        comment: "Composite quality score [0, 1] derived from rubric pass rate; NULL until first critique cycle."
+      # up: SQL expression to populate the column for existing rows during expand.
+      # References other columns from the same row via unqualified column names.
+      up: "NULL"
+      # down: expression to reverse the expand (used during rollback).
+      # For a new nullable column the rollback simply drops it — no down expression needed.
+      down: null

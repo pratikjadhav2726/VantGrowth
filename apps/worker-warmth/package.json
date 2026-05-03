@@ -1,0 +1,24 @@
+{
+  "name": "@growthos/worker-warmth",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "lint": "biome check src",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@growthos/db": "workspace:*",
+    "nats": "^2.29.3",
+    "zod": "^3.23.8",
+    "@growthos/observability": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.4"
+  }
+}

@@ -1,35 +1,132 @@
-# GrowthOS v4
+# GrowthOS
 
-Phase-0 monorepo scaffold for GrowthOS domain implementation.
+GrowthOS is a self-hostable GTM operating system that combines:
+
+- a Next.js founder console (`apps/web`)
+- a Hono API (`apps/api`)
+- background workers for scoring, routing, critique, learning, and workflow callbacks
+- tenant-scoped data/event infrastructure (Postgres + NATS + object storage + analytics)
+
+It is designed for multi-tenant, asynchronous GTM operations where ingestion, scoring, approvals, and learning are all auditable and replayable.
+
+## What this repo does
+
+At a high level, this monorepo provides:
+
+- **Founder UX** for onboarding, motion stack scoring, approval queue, weekly review, and settings
+- **API contracts** for motions, approvals, signals, workflows, digest delivery, and tenant settings
+- **Worker pipelines** for signal routing, critique, learning, outbox publishing, and provisioning callbacks
+- **Data layer** with Drizzle + RLS patterns, migration workflows, and repository boundaries
+- **Observability** via OpenTelemetry + structured logs
 
 ## Quick start
+
+### Option A: local dev (pnpm)
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-API service defaults to `http://localhost:3001`.
+- Web: `http://localhost:3088`
+- API: `http://localhost:3001`
 
-## Current modules
+### Option B: Docker dev stack (recommended for demos)
 
-- `apps/api`: Hono API with async command acceptance pattern.
-- `packages/core`: domain schemas + deterministic motion scoring.
-- `packages/adapter`: `growthos_native` adapter contract starter.
-- `packages/skills`: skill frontmatter/body parser + loader.
-- `packages/design-system`: initial token set.
-- `packages/test-utils`: shared fixtures.
+```bash
+cp .env.example .env
+docker compose -f compose.dev.yaml up --build -d
+docker compose -f compose.dev.yaml ps
+```
 
-## First implemented endpoints
+- Web: `http://localhost:3000`
+- API: `http://localhost:3001`
+
+Default login for local demo:
+
+- Email: any valid email
+- Password: `growthos-dev-admin` (or `GROWTHOS_WEB_ADMIN_PASSWORD` if set)
+
+## Core endpoints
 
 - `GET /health`
+- `GET /v1/motion`
 - `POST /v1/motions/score`
-- `POST /v1/commands/outbox`
+- `GET /v1/approvals`
+- `POST /v1/approvals/decide`
+- `POST /v1/signals`
+- `POST /v1/signals/grade`
+- `GET /v1/digest/weekly`
+- `POST /v1/digest/send`
+- `GET /v1/settings`
+- `PATCH /v1/settings`
 
-## Architecture references
+## Paperclip fork integration status
 
-- `Growthos_v4.md`
-- `Growthos_v4_Technical_Architecture.md`
-- `Growthos_v4_Stack_Decisions.md`
-- `Growthos_v4_Implementation_Plan.md`
-- `FORKING_PLAN.md`
+You are right to call this out: Paperclip is integrated, but currently optional and env-gated.
+
+### Where it is used today
+
+- API route `POST /v1/paperclip/bootstrap-tenant` creates:
+  - Paperclip company
+  - initial `growthos_native` agent
+  - seed issue
+- `TenantProvisioningOrchestrator` includes a `paperclip_company` step in the provisioning sequence
+- `@growthos/adapter` contains typed Paperclip client contracts and `growthos_native` adapter schema
+
+### Why it may look unused
+
+- If `PAPERCLIP_BASE_URL` and `PAPERCLIP_SERVICE_TOKEN` are **not** set, the Paperclip client is disabled by design.
+- In that mode, most local flows still work via GTM-native services, so Paperclip is not in the critical path.
+
+### To enable your fork
+
+Point GrowthOS at your Paperclip fork deployment by setting:
+
+- `PAPERCLIP_BASE_URL`
+- `PAPERCLIP_SERVICE_TOKEN`
+- optional: `PAPERCLIP_TIMEOUT_MS`
+- optional strict mode: `GROWTHOS_REQUIRE_PAPERCLIP=true` (API health turns unhealthy and web shows warning banner when disconnected)
+
+See `.env.example` and `paperclip_guide.md`.
+
+## Local infra and operations
+
+For full infra stack (Postgres, NATS, Valkey, MinIO, ClickHouse, Qdrant, Gitea, Meilisearch, OpenBao), use:
+
+```bash
+pnpm infra:up
+pnpm infra:ps
+pnpm infra:down
+```
+
+Migration and seed flow:
+
+```bash
+pnpm migrate:dry-run
+pnpm migrate:apply
+pnpm seed:dev
+pnpm smoke:infra
+```
+
+## CI and quality gates
+
+CI runs on PR/push:
+
+- `pnpm check`
+- `pnpm typecheck`
+- `pnpm test`
+- migration dry-run + Atlas validate/lint
+
+## Docs
+
+- Architecture: `Growthos_v4_Technical_Architecture.md`
+- Stack decisions: `Growthos_v4_Stack_Decisions.md`
+- Implementation status: `Growthos_v4_Implementation_Plan.md`
+- Paperclip integration notes: `paperclip_guide.md`
+- Container images: `docker/README.md`
+- User guide: `docs/USER_GUIDE.md`
+- Contributing: `CONTRIBUTING.md`
+- Security policy: `SECURITY.md`
+- Code of conduct: `CODE_OF_CONDUCT.md`
+- Open-source checklist: `docs/OPEN_SOURCE_CHECKLIST.md`

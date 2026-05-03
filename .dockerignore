@@ -1,0 +1,31 @@
+# Dependencies & caches
+**/node_modules
+**/.pnpm-store
+**/.turbo
+**/.next/cache
+
+# Build outputs (rebuilt in image)
+**/dist
+**/.next
+
+# CI / VCS (not needed inside images)
+.github
+
+# Optional Pulumi install dir
+deploy/pulumi/node_modules
+**/*.md
+!README.md
+.cursor
+.claude
+.vscode
+.idea
+
+# Tests & local
+coverage
+**/*.test.ts
+**/*.spec.ts
+**/vitest.config.*
+**/playwright-report
+
+# Large / irrelevant for runtime images
+**/agent-transcripts

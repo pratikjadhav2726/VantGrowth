@@ -1,0 +1,38 @@
+{
+  "name": "@growthos/db",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "files": ["dist", "src", "drizzle", "ci", "atlas.hcl"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "biome check src",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "migrate:dry-run": "tsx src/migrate-dry-run-cli.ts",
+    "db:atlas-hash": "atlas migrate hash --env growthos",
+    "db:atlas-validate": "atlas migrate validate --env growthos",
+    "db:atlas-lint": "atlas migrate lint --env growthos --latest 1 --dev-url \"${ATLAS_LINT_DEV_URL:-docker://postgres/16/dev?search_path=public}\"",
+    "db:migrate-apply": "atlas migrate apply --env growthos",
+    "db:seed-dev": "tsx src/seed-dev-cli.ts",
+    "db:pgroll-start": "pgroll start --postgres-url \"$DATABASE_URL\" --schema growthos \"$PGROLL_MIGRATION_FILE\"",
+    "db:pgroll-complete": "pgroll complete --postgres-url \"$DATABASE_URL\" --schema growthos",
+    "db:pgroll-rollback": "pgroll rollback --postgres-url \"$DATABASE_URL\" --schema growthos",
+    "db:pgroll-status": "pgroll status --postgres-url \"$DATABASE_URL\" --schema growthos"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "nats": "^2.29.3",
+    "pg": "^8.20.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.19.4"
+  }
+}

@@ -1,0 +1,32 @@
+# pgroll expand-contract example: zero-downtime column rename.
+#
+# This migration renames growthos.motion_scores.rationale → scorer_rationale.
+#
+# During the expand phase:
+#   - Schema version "v1" (via growthos_<old-name> virtual schema):
+#       SELECT rationale FROM growthos.motion_scores  -- still works
+#   - Schema version "v2" (via growthos_<new-name> virtual schema):
+#       SELECT scorer_rationale FROM growthos.motion_scores  -- also works
+#
+# Old application pods continue to read/write `rationale`.
+# New application pods use `scorer_rationale`.
+# Both write to the same physical column via pgroll trigger magic.
+#
+# After contracting:
+#   1. Update packages/db/src/schema.ts: rename rationale → scorerRationale / "scorer_rationale"
+#   2. pnpm --filter @growthos/db db:generate
+#   3. pnpm --filter @growthos/db db:atlas-hash
+#   4. Commit the updated schema.ts + generated migration SQL + atlas.sum
+#
+# Usage:
+#   PGROLL_MIGRATION_FILE=packages/db/pgroll/migrations/002_rename_rationale_to_scorer_rationale.yaml \
+#     DATABASE_URL=postgresql://... pnpm migrate:expand
+#   # Deploy new code. Drain old pods.
+#   DATABASE_URL=postgresql://... pnpm migrate:contract
+
+name: 002_rename_rationale_to_scorer_rationale
+operations:
+  - rename_column:
+      table: motion_scores
+      from: rationale
+      to: scorer_rationale
