@@ -533,12 +533,22 @@ describe("API app", () => {
         identifier: "LAT-INB",
         name: "Inbound Strategist",
       })),
+      createAgentHire: vi.fn(async () => ({
+        agent: {
+          id: "agt_1",
+          identifier: "LAT-INB",
+          name: "Inbound Strategist",
+          status: "pending_approval",
+        },
+        approval: { id: "apr_1", status: "pending", type: "hire_agent" },
+      })),
       createIssue: vi.fn(async () => ({
         id: "iss_1",
         identifier: "LAT-1",
         title: "Seed issue",
         status: "todo",
       })),
+      listCompanyIssues: vi.fn(async () => []),
       checkoutIssue: vi.fn(),
       releaseIssue: vi.fn(),
       wakeupAgent: vi.fn(),
@@ -568,7 +578,7 @@ describe("API app", () => {
 
     expect(response.status).toBe(202);
     expect(mockClient.createCompany).toHaveBeenCalledTimes(1);
-    expect(mockClient.createAgent).toHaveBeenCalledTimes(1);
+    expect(mockClient.createAgentHire).toHaveBeenCalledTimes(1);
     expect(mockClient.createIssue).toHaveBeenCalledTimes(1);
     const responsePayload = (await response.json()) as {
       idempotencyKey: string;
@@ -584,12 +594,22 @@ describe("API app", () => {
         identifier: "LAT-INB",
         name: "Inbound Strategist",
       })),
+      createAgentHire: vi.fn(async () => ({
+        agent: {
+          id: "agt_1",
+          identifier: "LAT-INB",
+          name: "Inbound Strategist",
+          status: "pending_approval",
+        },
+        approval: { id: "apr_1", status: "pending", type: "hire_agent" },
+      })),
       createIssue: vi.fn(async () => ({
         id: "iss_1",
         identifier: "LAT-1",
         title: "Seed issue",
         status: "todo",
       })),
+      listCompanyIssues: vi.fn(async () => []),
       checkoutIssue: vi.fn(),
       releaseIssue: vi.fn(),
       wakeupAgent: vi.fn(),

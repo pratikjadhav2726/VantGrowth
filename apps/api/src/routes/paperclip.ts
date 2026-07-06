@@ -50,7 +50,10 @@ export const createPaperclipRoutes = (
       }),
     );
 
-    const agent = await deps.paperclipClient.createAgent({
+    // Paperclip owns hiring governance: new agents are created as a pending
+    // board approval (control plane), not activated directly. The agent starts
+    // in `pending_approval` and a human resolves the hire inside Paperclip.
+    const hire = await deps.paperclipClient.createAgentHire({
       companyId: company.id,
       name: payload.initialAgent.name,
       role: payload.initialAgent.role,
@@ -59,12 +62,14 @@ export const createPaperclipRoutes = (
       budgetMonthlyCents: payload.initialAgent.budgetMonthlyCents,
     });
 
+    // The seed issue is created unassigned — a pending-approval agent cannot be
+    // assigned work yet. It lands in the backlog and can be assigned once the
+    // hire is approved in Paperclip.
     const issue = await deps.paperclipClient.createIssue(
       paperclipIssueCreateInputSchema.parse({
         companyId: company.id,
         title: payload.seedIssue.title,
         description: payload.seedIssue.description,
-        assigneeAgentId: agent.id,
         metadata: {
           idempotency_key: idempotencyKey,
           source: "growthos.bootstrap_tenant.v1",
@@ -77,7 +82,9 @@ export const createPaperclipRoutes = (
         tenantId: payload.tenantExternalId,
         idempotencyKey,
         company,
-        agent,
+        agent: hire.agent,
+        approval: hire.approval ?? null,
+        agentApprovalRequired: hire.agent.status === "pending_approval",
         issue,
       },
       202,

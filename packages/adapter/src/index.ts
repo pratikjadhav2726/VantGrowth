@@ -56,10 +56,15 @@ export type PaperclipCompanyCreateInput = z.infer<
   typeof paperclipCompanyCreateInputSchema
 >;
 
-export const paperclipCompanySchema = z.object({
-  id: z.string().min(1),
-  identifier: z.string().min(1),
-});
+export const paperclipCompanySchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().optional(),
+    // Current Paperclip companies expose `issuePrefix`, not `identifier`.
+    identifier: z.string().optional(),
+    issuePrefix: z.string().optional(),
+  })
+  .passthrough();
 export type PaperclipCompany = z.infer<typeof paperclipCompanySchema>;
 
 export const paperclipAgentCreateInputSchema = z.object({
@@ -76,12 +81,36 @@ export type PaperclipAgentCreateInput = z.infer<
   typeof paperclipAgentCreateInputSchema
 >;
 
-export const paperclipAgentSchema = z.object({
-  id: z.string().min(1),
-  identifier: z.string().min(1).optional(),
-  name: z.string().min(1),
-});
+export const paperclipAgentSchema = z
+  .object({
+    id: z.string().min(1),
+    identifier: z.string().min(1).optional(),
+    name: z.string().min(1),
+    status: z.string().optional(),
+  })
+  .passthrough();
 export type PaperclipAgent = z.infer<typeof paperclipAgentSchema>;
+
+// New agents in Paperclip require board approval when the company has
+// `requireBoardApprovalForNewAgents` enabled (the default). The hire endpoint
+// creates the agent in `pending_approval` and returns the linked approval, which
+// a human resolves inside Paperclip (the control plane) before the agent runs.
+export const paperclipApprovalSchema = z
+  .object({
+    id: z.string().min(1),
+    status: z.string().optional(),
+    type: z.string().optional(),
+  })
+  .passthrough();
+export type PaperclipApproval = z.infer<typeof paperclipApprovalSchema>;
+
+export const paperclipAgentHireResultSchema = z.object({
+  agent: paperclipAgentSchema,
+  approval: paperclipApprovalSchema.nullable().optional(),
+});
+export type PaperclipAgentHireResult = z.infer<
+  typeof paperclipAgentHireResultSchema
+>;
 
 export const paperclipIssueCreateInputSchema = z.object({
   companyId: z.string().min(1),
@@ -89,7 +118,9 @@ export const paperclipIssueCreateInputSchema = z.object({
   description: z.string().optional(),
   status: z.string().default("todo"),
   priority: z.string().default("medium"),
-  assigneeAgentId: z.string().min(1),
+  // Optional: a freshly hired agent is `pending_approval` and cannot be
+  // assigned work yet, so the seed issue is created unassigned.
+  assigneeAgentId: z.string().min(1).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 export type PaperclipIssueCreateInput = z.input<
@@ -103,6 +134,24 @@ export const paperclipIssueSchema = z.object({
   status: z.string().min(1),
 });
 export type PaperclipIssue = z.infer<typeof paperclipIssueSchema>;
+
+// Shape returned by the issue-list endpoint (a superset of paperclipIssueSchema).
+// Kept lenient so Paperclip can evolve the row without breaking the poller.
+export const paperclipIssueListItemSchema = z
+  .object({
+    id: z.string().min(1),
+    identifier: z.string().optional().nullable(),
+    title: z.string().optional().nullable(),
+    status: z.string().min(1),
+    assigneeAgentId: z.string().nullable().optional(),
+    companyId: z.string().optional(),
+  })
+  .passthrough();
+export type PaperclipIssueListItem = z.infer<
+  typeof paperclipIssueListItemSchema
+>;
+
+export const paperclipIssueListSchema = z.array(paperclipIssueListItemSchema);
 
 export const paperclipCheckoutInputSchema = z.object({
   issueId: z.string().min(1),
@@ -129,7 +178,14 @@ export type PaperclipWakeupInput = z.input<typeof paperclipWakeupInputSchema>;
 export interface PaperclipClientPort {
   createCompany(input: PaperclipCompanyCreateInput): Promise<PaperclipCompany>;
   createAgent(input: PaperclipAgentCreateInput): Promise<PaperclipAgent>;
+  createAgentHire(
+    input: PaperclipAgentCreateInput,
+  ): Promise<PaperclipAgentHireResult>;
   createIssue(input: PaperclipIssueCreateInput): Promise<PaperclipIssue>;
+  listCompanyIssues(
+    companyId: string,
+    opts?: { limit?: number },
+  ): Promise<PaperclipIssueListItem[]>;
   checkoutIssue(input: PaperclipCheckoutInput): Promise<PaperclipIssue>;
   releaseIssue(issueId: string): Promise<void>;
   wakeupAgent(input: PaperclipWakeupInput): Promise<void>;
@@ -167,6 +223,18 @@ export class PaperclipClient implements PaperclipClientPort {
     return paperclipAgentSchema.parse(result);
   }
 
+  async createAgentHire(
+    input: PaperclipAgentCreateInput,
+  ): Promise<PaperclipAgentHireResult> {
+    const body = paperclipAgentCreateInputSchema.parse(input);
+    const result = await this.request(
+      "POST",
+      `/api/companies/${body.companyId}/agent-hires`,
+      body,
+    );
+    return paperclipAgentHireResultSchema.parse(result);
+  }
+
   async createIssue(input: PaperclipIssueCreateInput): Promise<PaperclipIssue> {
     const body = paperclipIssueCreateInputSchema.parse(input);
     const result = await this.request(
@@ -175,6 +243,23 @@ export class PaperclipClient implements PaperclipClientPort {
       body,
     );
     return paperclipIssueSchema.parse(result);
+  }
+
+  async listCompanyIssues(
+    companyId: string,
+    opts: { limit?: number } = {},
+  ): Promise<PaperclipIssueListItem[]> {
+    const id = z.string().min(1).parse(companyId);
+    const limit = opts.limit ?? 100;
+    const result = await this.request(
+      "GET",
+      `/api/companies/${id}/issues?limit=${limit}`,
+    );
+    // The endpoint may return a bare array or an envelope { items: [...] }.
+    const rows = Array.isArray(result)
+      ? result
+      : ((result as { items?: unknown })?.items ?? []);
+    return paperclipIssueListSchema.parse(rows);
   }
 
   async checkoutIssue(input: PaperclipCheckoutInput): Promise<PaperclipIssue> {

@@ -1,0 +1,67 @@
+# Paperclip control plane, attached to the GrowthOS dev Docker network.
+#
+# Runs Paperclip (authenticated/private) + its own Postgres, joined to the
+# existing `growthos-dev_default` network so the GrowthOS `api` service can
+# reach it at http://paperclip:3100 (no host loopback / LAN exposure needed).
+#
+# Bring up:   docker compose -f compose.paperclip.yaml up -d --build
+# UI:         http://localhost:3100
+#
+# Kept as a SEPARATE compose project so it does not re-trigger the GrowthOS
+# `migrate` service.
+
+name: paperclip-cp
+
+services:
+  paperclip-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: paperclip
+      POSTGRES_DB: paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - paperclip-pgdata:/var/lib/postgresql/data
+    networks:
+      growthos:
+        aliases: [paperclip-db]
+
+  paperclip:
+    build:
+      context: ../paperclip
+      dockerfile: Dockerfile
+    ports:
+      - "3100:3100"
+    environment:
+      DATABASE_URL: postgres://paperclip:paperclip@paperclip-db:5432/paperclip
+      PORT: "3100"
+      HOST: "0.0.0.0"
+      SERVE_UI: "true"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_PUBLIC_URL: "http://localhost:3100"
+      # Allow the in-network service hostname so the Dockerized GrowthOS api
+      # (which calls http://paperclip:3100) passes the private-hostname guard.
+      PAPERCLIP_ALLOWED_HOSTNAMES: "paperclip,localhost"
+      BETTER_AUTH_SECRET: "30271fc8752d9090b0214cb2574dc436fbe37c9e3103346518c1d17bd9e5e070"
+    volumes:
+      - paperclip-data:/paperclip
+    depends_on:
+      paperclip-db:
+        condition: service_healthy
+    networks:
+      growthos:
+        aliases: [paperclip]
+
+networks:
+  growthos:
+    external: true
+    name: growthos-dev_default
+
+volumes:
+  paperclip-pgdata:
+  paperclip-data:

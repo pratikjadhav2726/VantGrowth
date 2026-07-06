@@ -18,6 +18,12 @@ const API_BASE =
   process.env.NEXT_PUBLIC_GROWTHOS_API_BASE_URL ??
   "http://localhost:3000";
 
+// Server-side service token used to authenticate against the GrowthOS API's
+// token-protected mutation routes (e.g. POST /v1/motions/score). Only available
+// in server components / server actions — never exposed to the browser because
+// it is intentionally NOT a NEXT_PUBLIC_ variable.
+const SERVER_SERVICE_TOKEN = process.env.GROWTHOS_API_SERVICE_TOKEN;
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -48,6 +54,11 @@ async function apiFetch<T>(
     headers: {
       "Content-Type": "application/json",
       "X-Tenant-Id": tenantId,
+      // Authenticate token-protected mutation routes by default. An explicit
+      // Authorization header (e.g. patchSettings) still overrides this.
+      ...(SERVER_SERVICE_TOKEN
+        ? { Authorization: `Bearer ${SERVER_SERVICE_TOKEN}` }
+        : {}),
       ...(fetchOptions.headers as Record<string, string> | undefined),
     },
   });

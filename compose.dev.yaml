@@ -39,7 +39,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: growthos_ci
     ports:
-      - "5432:5432"
+      - "5442:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d growthos_ci"]
       interval: 3s
@@ -106,6 +106,7 @@ services:
     volumes:
       - growthos-dev-clickhouse:/var/lib/clickhouse
       - ./packages/db/clickhouse:/docker-entrypoint-initdb.d:ro
+      - ./docker/clickhouse-experimental.xml:/etc/clickhouse-server/users.d/experimental.xml:ro
 
   minio:
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z
@@ -226,7 +227,7 @@ services:
       NODE_ENV: development
       PORT: "3001"
     ports:
-      - "3001:3001"
+      - "3091:3001"
     volumes:
       - ./apps/api/src:/app/apps/api/src:ro
       - ./packages:/app/packages:ro
@@ -250,12 +251,12 @@ services:
     <<: *env
     environment:
       GROWTHOS_API_BASE_URL: http://api:3001
-      NEXT_PUBLIC_GROWTHOS_API_BASE_URL: http://localhost:3001
+      NEXT_PUBLIC_GROWTHOS_API_BASE_URL: http://localhost:3091
       NODE_ENV: development
       PORT: "3000"
       HOSTNAME: 0.0.0.0
     ports:
-      - "3000:3000"
+      - "3080:3000"
     volumes:
       - ./apps/web/src:/app/apps/web/src:ro
       - ./apps/web/public:/app/apps/web/public:ro
