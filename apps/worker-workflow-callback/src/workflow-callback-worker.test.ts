@@ -1,3 +1,4 @@
+import { StubBillingClient } from "@growthos/billing";
 import type { TenantProvisioningRuntimeState } from "@growthos/core";
 import {
   StubGiteaProvisioningClient,
@@ -5,12 +6,11 @@ import {
   StubNatsProvisioningClient,
   StubPaperclipProvisioningClient,
 } from "@growthos/core";
-import { StubZitadelClient } from "@growthos/identity";
-import { StubBillingClient } from "@growthos/billing";
 import {
   InMemoryOutboxRepository,
   InMemoryWorkflowRunRepository,
 } from "@growthos/db";
+import { StubZitadelClient } from "@growthos/identity";
 import { EnvSecretManager, TenantSecretsService } from "@growthos/secrets";
 import { describe, expect, it, vi } from "vitest";
 import {

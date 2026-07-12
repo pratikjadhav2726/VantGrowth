@@ -19,6 +19,7 @@
  * the worker returns immediately without re-emitting events.
  */
 
+import type { BillingClient } from "@growthos/billing";
 import {
   type GiteaProvisioningClient,
   type MinioProvisioningClient,
@@ -32,10 +33,9 @@ import {
   createTenantProvisioningProgressOutboxCommand,
   tenantProvisioningWorkflowInputSchema,
 } from "@growthos/core";
-import type { ZitadelClient } from "@growthos/identity";
-import type { BillingClient } from "@growthos/billing";
 import type { OutboxRepository, WorkflowRunRepository } from "@growthos/db";
 import { tenantScopedSubject } from "@growthos/db";
+import type { ZitadelClient } from "@growthos/identity";
 import type { TenantSecretsService } from "@growthos/secrets";
 import { OutboxProvisioningProgressReporter } from "./outbox-progress-reporter.js";
 

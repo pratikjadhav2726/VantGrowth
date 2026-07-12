@@ -131,13 +131,16 @@ export class PaperclipHeartbeatWorker {
       companyId,
       agentId,
       issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      title: issue.title,
+      issueIdentifier: issue.identifier ?? null,
+      title: issue.title ?? null,
       runId,
     };
 
     if (this.deps.config.dryRun) {
-      this.deps.logger.info(base, "[dry-run] would check out and dispatch issue");
+      this.deps.logger.info(
+        base,
+        "[dry-run] would check out and dispatch issue",
+      );
       return;
     }
 

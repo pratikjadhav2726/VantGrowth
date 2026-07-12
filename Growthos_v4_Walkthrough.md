@@ -20,7 +20,7 @@
 | **worker-heartbeat** | Runs the per-agent harness (Ralph loop + skills + memory) |
 | **worker-critique** | Confidence scorer + self-critique |
 | **worker-learning** | Distills feedback into gtm_learnings |
-| **smartermcp-gateway** | Tool gateway with entitlements + DLP + cache |
+| **n8n** | Single connector fabric for downstream SaaS workflows |
 | **NATS JetStream** | All async fan-out, queues, KV, leader locks |
 | **Postgres 16 + pgvector** | System of record (RLS per company_id) |
 | **Gitea** | Per-tenant agent filesystem (skills, memory, plans, drafts) |
@@ -140,7 +140,7 @@ The workflow steps (each is a NATS request/reply with at-least-once + idempotenc
 
 ### Step 1 — Scrape (parallel, ~30s)
 
-`smartermcp-gateway` calls `firecrawl.scrape` with allowlist `lattice.dev/*`. Output cached in MinIO (`raw/ten_lat_01/scrape/<sha>.html.gz`) for 30 days. Cost: $0.004.
+n8n runs the configured discovery workflow, calls downstream scrape/search services, and sends GrowthOS a normalized signed signal with artifact URLs/object references. Output is cached in MinIO (`raw/ten_lat_01/scrape/<sha>.html.gz`) for 30 days. Cost: $0.004.
 
 ### Step 2 — Profile company (~25s, ~6k input / ~1.5k output tokens)
 
@@ -290,7 +290,7 @@ The Intel Director is a system agent (one per tenant, minted at T+0). Its first 
    - Current motion stack (from Postgres)
    - Active issue (LAT-1) + recent comments
    - Memory pointers (top-K Qdrant queries against `mem_ten_lat_01` filtered by `agent_id=agt_LAT_INT_01 OR scope=tenant`)
-   - Tool entitlements (resolved by SmarterMCP — only `web_search`, `firecrawl_scrape`, `competitor_track` for Intel Director)
+   - Connector boundary (GrowthOS receives normalized n8n signals and can only enqueue approved dispatch actions)
    - Skill front-matter (progressive disclosure — full skill bodies loaded only when invoked)
    - Plan pointer + recent activity log tail (last 50 lines)
 
@@ -302,7 +302,7 @@ The Intel Director is a system agent (one per tenant, minted at T+0). Its first 
 
 ### What the Intel Director actually does in this heartbeat (~3 minutes)
 
-The model (claude-sonnet-4-6 via LiteLLM) calls tools through SmarterMCP:
+The model (claude-sonnet-4-6 via LiteLLM) works from normalized n8n signals and GrowthOS memory:
 
 | Step | Tool | Cost |
 |---|---|---|
@@ -355,7 +355,7 @@ The signal routed at 09:18 wakes `agt_LAT_INB_01` immediately (priority P2, SLA 
 
 1. Loads `comparison-post.md` skill body (`load_skill('comparison-post')`).
 2. Drafts the post in `agents/agt_LAT_INB_01/drafts/2026-04-22_oss-vs-hosted-flags.md` — 1,400 words, 7 H2s, 3 code samples, comparison table.
-3. **Claim grounding pass** — every comparative claim ("LaunchDarkly costs $X", "Lattice evaluates in <1ms") is checked against `content_claims` (DB-backed allowlist, populated from the discovery sweep). The agent calls `claims.verify(claim_text)` via SmarterMCP. Two claims fail (no source) — the agent rewrites them into hedged form.
+3. **Claim grounding pass** — every comparative claim ("LaunchDarkly costs $X", "Lattice evaluates in <1ms") is checked against `content_claims` (DB-backed allowlist, populated from n8n discovery signals). Two claims fail (no source) — the agent rewrites them into hedged form.
 4. Commits draft to Gitea (`drafts/...md`).
 5. Calls Confidence Scorer (`worker-critique`) via NATS request/reply.
 
@@ -463,7 +463,7 @@ INSERT INTO event_outbox (subject, payload) VALUES
 
 Two consumers:
 
-**Consumer 1 — publication agent** (sub-agent of Inbound Content Strategist). Picks up the edited document, calls `webflow.publish_post` via SmarterMCP. Webflow returns the live URL. Inserts `attribution_touchpoints` row tagged `kind=publication, channel=blog, content_id=...`.
+**Consumer 1 — publication agent** (sub-agent of Inbound Content Strategist). Picks up the edited document and enqueues `n8n.dispatch.requested.v1` with `actionType=publish_content`. n8n runs the Webflow workflow and returns the live URL through execution metadata. GrowthOS inserts an `attribution_touchpoints` row tagged `kind=publication, channel=blog, content_id=...`.
 
 **Consumer 2 — confidence updater**. Updates `confidence_scores` for `agt_LAT_INB_01`: edit_distance 0.12 is within tolerance → small upward bump (+0.03). Updates `motion_scores` for `inbound_content` (+0.01). Both treated as Bayesian updates with informative priors so a single approval moves the needle a little, not a lot.
 
@@ -541,9 +541,9 @@ She approves. The Learning Director then:
 | **Async by default** | Every cross-component handoff went through NATS. The only sync calls were tenant provisioning (single-tx, <2s) and user-initiated reads. |
 | **Stateless services** | Every worker (heartbeat, signal-router, critique, learning) reads its full context from Paperclip + Gitea + Postgres + Qdrant on each invocation. No in-process state. Restart-safe. |
 | **Idempotency** | Every NATS handler keyed on `signal_id` / `approval_id` / `heartbeat_id`. Duplicate deliveries no-op. Outbox pattern guarantees Postgres↔NATS consistency. |
-| **Backpressure as demotion** | If the LLM router is saturated, low-priority heartbeats (P3/P4) are deferred up to 60min; P0 signals always preempt. SmarterMCP returns `429 + retry_after` rather than silently queueing. |
+| **Backpressure as demotion** | If the LLM router or n8n dispatch boundary is saturated, low-priority heartbeats (P3/P4) are deferred up to 60min; P0 signals always preempt. GrowthOS records retry metadata instead of silently queueing. |
 | **Tenant isolation** | Every SQL query in this trace is RLS-scoped on `company_id`. Gitea repo is per-tenant. Qdrant collection is per-tenant. NATS subjects are filtered by JetStream consumer with `subject_filter=gos.*.{tenant_id}.*` for tenant-scoped events. |
-| **Harness anatomy** | Filesystem (Gitea), code-as-tool (SmarterMCP), sandbox (Daytona on demand), memory + search (Qdrant + AGENTS.md regen), context-rot mitigation (skills as progressive disclosure, tool-call offloading), Ralph loop (heartbeat hook), planning + self-verification (plan.md + worker-critique). |
+| **Harness anatomy** | Filesystem (Gitea), connector fabric (n8n), sandbox (Daytona on demand), memory + search (Qdrant + AGENTS.md regen), context-rot mitigation (skills as progressive disclosure, artifact references), Ralph loop (heartbeat hook), planning + self-verification (plan.md + worker-critique). |
 | **Replayability** | Every action references its triggering signal_id and the Gitea SHA of the agent-fs at run time. Any heartbeat can be replayed against the same inputs to reproduce its output. |
 | **Confidence as economics** | Tier promotion is automatic but reversible. Approval friction decays as trust is earned. The owner's edit_distance is the canonical learning signal. |
 | **Cost discipline** | Discovery sweep ~$0.07. First Inbound heartbeat ~$0.07. First Community heartbeat ~$0.03. Per-tenant first-day spend $0.30, week-one ~$3.20 — well under the $275 monthly budget ceiling. |
@@ -556,7 +556,7 @@ She approves. The Learning Director then:
 - **Signal storm** — 200 signals in 5 minutes; how the Signal Router rate-limits per agent and merges duplicates.
 - **Hallucinated claim slips approval** — what the post-hoc claim auditor (runs nightly against `attribution_touchpoints` + `content_claims`) catches and how it triggers a retraction workflow.
 - **Confidence decay** — 3 consecutive rejections; the demotion path back from P3→P2.
-- **Cross-tenant noisy neighbor** — one tenant burns through their LLM budget; how rate limiting + budget enforcement at SmarterMCP isolates the blast radius.
+- **Cross-tenant noisy neighbor** — one tenant burns through their LLM or n8n dispatch budget; how GrowthOS rate limiting + n8n workflow isolation contains the blast radius.
 - **Paperclip outage** — degraded-mode where heartbeats queue locally in NATS for up to 30 min and replay on recovery.
 - **Schema migration** — adding a column to `signals` without taking writes offline (Atlas + pgroll expand-contract).
 

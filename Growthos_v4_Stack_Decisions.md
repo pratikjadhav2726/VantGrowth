@@ -1,6 +1,6 @@
 # GrowthOS v4 — Stack Decisions
 
-**Companion to:** `Growthos_v4.md` (strategic spec), `Growthos_v4_Technical_Architecture.md` (architecture), `paperclip_guide.md` (control plane), `anatomy_of_agentic_harness.md` (harness principles), `SmarterMCP_guide.md` (tool gateway)
+**Companion to:** `Growthos_v4.md` (strategic spec), `Growthos_v4_Technical_Architecture.md` (architecture), `paperclip_guide.md` (control plane), `anatomy_of_agentic_harness.md` (harness principles), `SmarterMCP_guide.md` (disabled legacy reference)
 **Audience:** Founder, platform engineers, design lead
 **Status:** Opinionated, OSS-first, self-hostable blueprint
 
@@ -27,10 +27,10 @@
 | Bash + code as general tool | Per-run **Daytona** (or self-hosted E2B) sandbox: bash, python, node, playwright preinstalled. |
 | Sandboxes with defaults | Per-motion sandbox images. `inbound` ships with CMS CLIs, schema validators, GEO probe scripts. `outbound` ships with enrichment libs, CRM CLIs. `community` ships with anti-detect Playwright profiles. |
 | Memory + search | Filesystem-first `FOUNDER.md` loaded at agent start. **Qdrant** for dense retrieval across learnings + claims + memory. **Meilisearch** for BM25 over approval queue, signals, run logs. |
-| Context rot mitigation | MCP gateway tool-call offloading (large responses → filesystem handle + preview). Skills loaded progressively via manifest-then-body. Compaction summaries written as Paperclip issue documents. |
+| Context rot mitigation | n8n passes normalized webhook payloads and artifact URLs/object references instead of large vendor responses. Skills loaded progressively via manifest-then-body. Compaction summaries written as Paperclip issue documents. |
 | Ralph loops | Learning Director and Weekly Review are Ralph loops: a hook detects early-stop, reinjects goal into a fresh run, continues from filesystem state. Paperclip routines + Temporal/Restate `continueAsNew` realizes this. |
 | Planning + self-verification | Plan file = Paperclip issue document (`key=plan`). Self-verification = the confidence critic, backed by structured rubrics stored in git. |
-| JIT tool assembly | SmarterMCP session entitlements recomputed per heartbeat from `motion_stack × skill_manifest × current_task`. Agent never sees tools it cannot use right now. |
+| JIT tool assembly | GrowthOS exposes only n8n ingress/dispatch contracts to agents. Downstream SaaS access is controlled by n8n workflows and GrowthOS approval policy. |
 
 ---
 
@@ -162,8 +162,8 @@ NATS JetStream subjects (t.{tenant}.{domain}.{event})
 | Offline evals | **Promptfoo** (OSS MIT) in CI; Langfuse datasets for live replay |
 | Prompt + skill store | **Git (Gitea)** — Langfuse references git SHAs; no duplicated source of truth |
 | Sandboxes | **Daytona** or **E2B** OSS — per-run container with fs + bash + browser |
-| MCP runtime | **SmarterMCP** + MCP TypeScript SDK for custom servers |
-| DLP | **Microsoft Presidio** (OSS) in the MCP filter chain |
+| External integration runtime | **n8n** as the single connector fabric; GrowthOS talks to n8n through signed webhooks/API |
+| DLP | GrowthOS policy checks before approval/dispatch; optional Presidio stage in n8n workflows for vendor payloads |
 | Structured output | **Zod** + model-native structured output — avoid Guardrails AI overhead |
 
 ---
@@ -212,7 +212,7 @@ API + domain
 Harness
   Paperclip fork (companies/agents/issues/docs/routines/approvals) +
     growthos_native adapter + growthos.* execution-policy stages
-  SmarterMCP + MCP TS SDK + Presidio DLP
+  n8n connector fabric + signed GrowthOS webhooks + optional Presidio DLP stage
   LiteLLM (model router) + Langfuse (traces) + Promptfoo (evals)
   Daytona / E2B sandboxes (bash/browser/code)
   Gitea per-tenant workspace (skills, playbooks, evidence, reviews)

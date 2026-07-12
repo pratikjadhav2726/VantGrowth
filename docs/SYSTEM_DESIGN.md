@@ -30,7 +30,7 @@ This document describes:
 | --- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | 1   | Paperclip is the harness — extend, don't reinvent          | Companies, agents, issues, routines, approvals, heartbeat-runs are primitives we use, not rebuild    |
 | 2   | Domain layer is the moat                                   | Motion scoring, signal routing, learning, confidence, warmth, GEO, experiments, attribution are ours |
-| 3   | SmarterMCP is the tool gateway                             | No agent calls external SaaS directly; every tool call exits through the governed gateway            |
+| 3   | n8n is the connector fabric                                | GrowthOS integrates once with n8n; n8n owns downstream SaaS credentials, workflows, and retries      |
 | 4   | Automate repeatable GTM work, not strategic accountability | Human approval required for all P2–P4 actions (public, commercial, sensitive)                        |
 | 5   | One canonical owner per domain                             | Avoid split-brain state; all state changes emit versioned events                                     |
 | 6   | Durable-first execution                                    | Workflows checkpoint at every node; idempotency key on every external action                         |
@@ -97,15 +97,15 @@ This document describes:
 └────────────────────────────────────────────────────────────────────────┘
                       │
 ┌─────────────────────▼──────────────────────────────────────────────┐
-│                SmarterMCP Gateway (separate service)               │
-│   Tenant isolation   ·   Tool entitlements   ·   DLP (Presidio)    │
-│   proxy_search / proxy_filter / proxy_explore                      │
-│   Response cache   ·   Per-tenant quotas   ·   Immutable audit     │
+│                    n8n Connector Fabric                            │
+│   Workflow automation   ·   Downstream SaaS credentials            │
+│   Vendor retries        ·   Webhook normalization                  │
+│   Approved dispatch     ·   Source execution metadata              │
 └──────────────────────────────────┬─────────────────────────────────┘
-                                   │ MCP / HTTPS
+                                   │ HTTPS webhooks / n8n API
                                    │
 ┌──────────────────────────────────▼─────────────────────────────────┐
-│                   Upstream MCP Servers / SaaS                       │
+│                         External SaaS                               │
 │  CRM (HubSpot/Salesforce)   ·   GA4 / Mixpanel / Segment           │
 │  LinkedIn / X / Slack / Reddit   ·   Google / Perplexity / Exa     │
 │  Customer.io / Loops / Resend   ·   Apollo / Clearbit               │
@@ -128,7 +128,7 @@ This document describes:
 | `worker-warmth`        | LinkedIn touch scheduling + content engagement tracker  | TypeScript            | Horizontal                    |
 | `worker-geo`           | Periodic AI-search citation probes                      | TypeScript            | Horizontal, rate-limited      |
 | `outbox-publisher`     | Postgres NOTIFY → NATS JetStream bridge, leader-elected | Rust                  | 1 leader (NATS KV), N standby |
-| `smartermcp-gateway`   | Tool gateway (SmarterMCP)                               | Per vendor            | Separate deployment           |
+| `n8n`                  | Single external integration connector fabric            | n8n deployment model  | Separate deployment           |
 | Restate server         | Durable workflow execution                              | OSS binary            | Clustered                     |
 
 
@@ -253,7 +253,7 @@ All tenant-scoped tables carry an `app_role` RLS policy enforcing `tenant_id = c
 | Agent activity, heartbeat traces         | Paperclip `heartbeat_runs` + ClickHouse `activity_log`      |
 | Experiment state                         | `experiments` table                                         |
 | Structured learnings and playbook        | `gtm_learnings` + `playbook_versions` + Gitea (skill files) |
-| Tool call audit                          | SmarterMCP immutable audit log                              |
+| External action audit                    | GrowthOS outbox + n8n workflow/execution metadata            |
 | Billing / plan entitlements              | Lago (usage) + Stripe (card rail)                           |
 | Founder secrets, CRM API keys            | OpenBao per-tenant KMS-wrapped                              |
 
@@ -518,10 +518,10 @@ drafted
 ### 9.3 Key Guardrails
 
 - Claims library with verification status — every factual claim must be traceable to evidence in Gitea
-- DLP via Microsoft Presidio in SmarterMCP filter chain — scans for PII and unverified claims before dispatch
+- DLP and content policy checks run in GrowthOS before approved dispatch reaches n8n
 - Community norms per platform — hard-coded per-channel posting policies
 - Suppression lists and consent enforcement
-- Per-tenant rate limits enforced at SmarterMCP — runaway agent cannot exhaust upstream credits
+- Per-tenant rate limits enforced in GrowthOS before dispatch plus n8n workflow-level vendor limits
 - Anomaly alerts for action spikes (>3× 7-day rolling average triggers hold + notification)
 - Do-not-learn filters prevent policy and compliance rules from being overwritten by learning
 
@@ -558,7 +558,7 @@ No polling. No Supabase Realtime dependency. The NATS subject hierarchy `t.{tena
 | Cost attribution per tenant | ClickHouse `cost_events` + Langfuse run costs |
 
 
-Every Paperclip heartbeat run carries a `X-Paperclip-Run-Id` header propagated through all downstream calls. SmarterMCP tool call logs are joinable on this header.
+Every Paperclip heartbeat run carries a `X-Paperclip-Run-Id` header propagated through GrowthOS events and n8n dispatch payloads. n8n workflow and execution IDs are stored in GrowthOS signal payloads for replay/debugging.
 
 ---
 
@@ -570,11 +570,11 @@ Every Paperclip heartbeat run carries a `X-Paperclip-Run-Id` header propagated t
 | AuthN            | Zitadel OIDC; JWT validated at API gateway; no session token stored in agent memory                             |
 | AuthZ            | Postgres RLS `app_role` enforces `tenant_id` on every table; no raw SQL without RLS active                      |
 | Secrets          | OpenBao per-tenant KMS-wrapped; dynamic DB credentials via Vault PKI; never stored in env vars at rest          |
-| Tool isolation   | SmarterMCP enforces tool entitlements per tenant per motion stack; no agent escapes its sandbox                 |
+| Tool isolation   | GrowthOS only exposes n8n ingress/dispatch contracts; downstream SaaS access lives in n8n credentials/workflows |
 | Agent sandboxes  | Daytona / E2B per-run isolated workspace; bash, browser, code exec — no persistent cross-run state              |
 | DLP              | Presidio scans all outbound content for PII and unverified claims before dispatch                               |
 | Tenant isolation | `natsSubject(tenant_id, ...)` helper enforces prefix on every NATS publish; consumer groups prefixed per tenant |
-| Audit            | SmarterMCP immutable tool-call log + Paperclip `heartbeat_runs` + `event_outbox` → full action provenance       |
+| Audit            | n8n workflow/execution metadata + Paperclip `heartbeat_runs` + `event_outbox` → full action provenance          |
 
 
 ---
@@ -625,7 +625,7 @@ Postgres 16 · ClickHouse · Qdrant · Meilisearch · Valkey · MinIO · Gitea �
 4. **Transactional outbox** — every domain mutation writes outbox row in same TX before returning; no fire-and-forget.
 5. **RLS on every tenant-scoped table** — `app_role` enforces it; no bypass path in application code.
 6. **Confidence scoring before persistence** — every output scored; rubric_failures stored; low-confidence discarded.
-7. **Budget enforcement** — per-run budget via LiteLLM session + 90% safety margin in adapter; hard ceiling in SmarterMCP.
+7. **Budget enforcement** — per-run budget via LiteLLM session + 90% safety margin in adapter; GrowthOS dispatch limits before n8n execution.
 8. **One canonical owner per domain** — no split-brain; other systems hold indexed/derived copies only.
 9. **Versioned playbook artifacts** — every playbook change is a new row in `playbook_versions`; no silent mutations.
 10. **Learning TTL + revalidation** — every learning expires unless revalidated; fossilized playbooks are prevented structurally.
@@ -653,4 +653,4 @@ The moat is not agent orchestration. The moat is:
 
 > **A founder-specific, evidence-backed startup operating playbook that compounds across motions and lifecycle stages — executed through trusted workflows, governed tooling, and structured learning from every approval, edit, and outcome.**
 
-Commodity layers (base orchestration, raw prompt generation, content drafting, standard dashboards) are intentionally outsourced to Paperclip and SmarterMCP. GrowthOS owns the domain layer: motion intelligence, confidence scoring, structured memory, experiment-driven learning, attribution, and the founder trust surface. These are the layers that compound.
+Commodity layers (base orchestration and downstream SaaS workflow wiring) are intentionally delegated to Paperclip and n8n. GrowthOS owns the domain layer: motion intelligence, confidence scoring, structured memory, experiment-driven learning, attribution, policy, approvals, and the founder trust surface. These are the layers that compound.

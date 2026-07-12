@@ -1,6 +1,11 @@
 import type { OutboxRepository } from "@growthos/db";
 import { tenantScopedSubject } from "@growthos/db";
 import {
+  type N8nDispatchRequest,
+  type N8nDispatchResult,
+  n8nDispatchRequestSchema,
+} from "@growthos/n8n";
+import {
   SpanKind,
   SpanStatusCode,
   getMeter,
@@ -23,10 +28,17 @@ export interface EventPublisher {
   publish(subject: string, payload: Record<string, unknown>): Promise<void>;
 }
 
+export interface N8nDispatchPort {
+  dispatch(input: N8nDispatchRequest): Promise<N8nDispatchResult>;
+}
+
 export interface OutboxPublisherDependencies {
   outboxRepository: OutboxRepository;
   eventPublisher: EventPublisher;
+  n8nDispatchClient?: N8nDispatchPort | null;
 }
+
+const N8N_DISPATCH_EVENT_TYPE = "n8n.dispatch.requested.v1";
 
 const runtimeConfigSchema = z.object({
   tenantIds: z.array(z.string().uuid()).min(1),
@@ -78,10 +90,14 @@ export class OutboxPublisher {
           let publishedCount = 0;
 
           for (const event of pending) {
-            await this.deps.eventPublisher.publish(
-              tenantScopedSubject(event.tenantId, event.eventType),
-              event.payload,
-            );
+            if (event.eventType === N8N_DISPATCH_EVENT_TYPE) {
+              await this.dispatchN8nAction(event.payload);
+            } else {
+              await this.deps.eventPublisher.publish(
+                tenantScopedSubject(event.tenantId, event.eventType),
+                event.payload,
+              );
+            }
             await this.deps.outboxRepository.markConsumed(
               event.tenantId,
               event.id,
@@ -102,6 +118,24 @@ export class OutboxPublisher {
           span.end();
         }
       },
+    );
+  }
+
+  private async dispatchN8nAction(
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.deps.n8nDispatchClient) {
+      throw new Error("n8n dispatch client is not configured");
+    }
+
+    const request = n8nDispatchRequestSchema.parse(payload);
+    const result = await this.deps.n8nDispatchClient.dispatch(request);
+    if (result.ok) return;
+
+    if (!result.retryable) return;
+
+    throw new Error(
+      `Retryable n8n dispatch failure: ${result.status ?? "network"} ${result.error}`,
     );
   }
 

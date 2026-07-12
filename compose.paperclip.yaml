@@ -1,7 +1,7 @@
 # Paperclip control plane, attached to the GrowthOS dev Docker network.
 #
-# Runs Paperclip (authenticated/private) + its own Postgres, joined to the
-# existing `growthos-dev_default` network so the GrowthOS `api` service can
+# Runs Paperclip + its own Postgres, joined to the existing GrowthOS Docker
+# network (`GROWTHOS_DOCKER_NETWORK`, defaulting to local dev) so the API can
 # reach it at http://paperclip:3100 (no host loopback / LAN exposure needed).
 #
 # Bring up:   docker compose -f compose.paperclip.yaml up -d --build
@@ -41,9 +41,10 @@ services:
       PORT: "3100"
       HOST: "0.0.0.0"
       SERVE_UI: "true"
-      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
-      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
-      PAPERCLIP_PUBLIC_URL: "http://localhost:3100"
+      PAPERCLIP_DEPLOYMENT_MODE: "${PAPERCLIP_DEPLOYMENT_MODE:-authenticated}"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-private}"
+      PAPERCLIP_BIND: "${PAPERCLIP_BIND:-lan}"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
       # Allow the in-network service hostname so the Dockerized GrowthOS api
       # (which calls http://paperclip:3100) passes the private-hostname guard.
       PAPERCLIP_ALLOWED_HOSTNAMES: "paperclip,localhost"
@@ -60,7 +61,7 @@ services:
 networks:
   growthos:
     external: true
-    name: growthos-dev_default
+    name: ${GROWTHOS_DOCKER_NETWORK:-growthos-n8n-local_default}
 
 volumes:
   paperclip-pgdata:

@@ -42,7 +42,10 @@ const apiConfigured = () => Boolean(API_BASE && DEV_TENANT_ID);
 
 async function fetchSettingsFromApi(): Promise<GrowthosSettings> {
   const res = await fetch(`${API_BASE}/v1/settings`, {
-    headers: { "X-Tenant-Id": DEV_TENANT_ID, "Content-Type": "application/json" },
+    headers: {
+      "X-Tenant-Id": DEV_TENANT_ID,
+      "Content-Type": "application/json",
+    },
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`GET /v1/settings failed: ${res.status}`);

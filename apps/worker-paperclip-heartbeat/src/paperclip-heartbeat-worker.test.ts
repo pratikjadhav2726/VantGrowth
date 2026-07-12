@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
 import type {
   PaperclipClientPort,
   PaperclipIssueListItem,
 } from "@growthos/adapter";
+import { describe, expect, it, vi } from "vitest";
 import { configFromEnv } from "./config.js";
 import {
   type DispatchContext,
@@ -28,9 +28,7 @@ const issue = (
   ...over,
 });
 
-function makeClient(
-  issues: PaperclipIssueListItem[],
-): PaperclipClientPort & {
+function makeClient(issues: PaperclipIssueListItem[]): PaperclipClientPort & {
   checkoutIssue: ReturnType<typeof vi.fn>;
   listCompanyIssues: ReturnType<typeof vi.fn>;
 } {
@@ -76,7 +74,10 @@ describe("PaperclipHeartbeatWorker", () => {
     const dispatched: DispatchContext[] = [];
     const worker = new PaperclipHeartbeatWorker({
       client,
-      config: configFromEnv({ ...baseEnv, PAPERCLIP_HEARTBEAT_DRY_RUN: "false" }),
+      config: configFromEnv({
+        ...baseEnv,
+        PAPERCLIP_HEARTBEAT_DRY_RUN: "false",
+      }),
       logger: silentLogger,
       dispatch: async (ctx) => {
         dispatched.push(ctx);
@@ -94,7 +95,11 @@ describe("PaperclipHeartbeatWorker", () => {
       runId: "run_1",
     });
     expect(dispatched).toEqual([
-      expect.objectContaining({ issueId: "runnable", agentId: "agt_1", runId: "run_1" }),
+      expect.objectContaining({
+        issueId: "runnable",
+        agentId: "agt_1",
+        runId: "run_1",
+      }),
     ]);
   });
 
@@ -102,7 +107,10 @@ describe("PaperclipHeartbeatWorker", () => {
     const client = makeClient([issue({ id: "boom" })]);
     const worker = new PaperclipHeartbeatWorker({
       client,
-      config: configFromEnv({ ...baseEnv, PAPERCLIP_HEARTBEAT_DRY_RUN: "false" }),
+      config: configFromEnv({
+        ...baseEnv,
+        PAPERCLIP_HEARTBEAT_DRY_RUN: "false",
+      }),
       logger: silentLogger,
       dispatch: async () => {
         throw new Error("dispatch exploded");

@@ -7,10 +7,7 @@ export interface SystemStatus {
   paperclip: {
     required: boolean;
     connected: boolean;
-    status:
-      | "connected"
-      | "required_but_disconnected"
-      | "optional_disconnected";
+    status: "connected" | "required_but_disconnected" | "optional_disconnected";
   };
 }
 

@@ -13,6 +13,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
+    "migrate:local": "tsx src/migrate-local-cli.ts",
     "migrate:dry-run": "tsx src/migrate-dry-run-cli.ts",
     "db:atlas-hash": "atlas migrate hash --env growthos",
     "db:atlas-validate": "atlas migrate validate --env growthos",

@@ -179,6 +179,7 @@ export const GROWTHOS_RLS_TABLE_SPECS: RlsTableSpec[] = [
         ($1, '{"rlsTest": true}'::jsonb)
       ON CONFLICT (tenant_id) DO UPDATE SET settings = EXCLUDED.settings
     `,
-    cleanupSql: `DELETE FROM growthos.tenant_settings WHERE tenant_id = $1::uuid`,
+    cleanupSql:
+      "DELETE FROM growthos.tenant_settings WHERE tenant_id = $1::uuid",
   },
 ];

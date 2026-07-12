@@ -77,9 +77,24 @@ export const SIGNAL_FEED: FeedItem[] = [
 ];
 
 export const NEXT_BEST_ACTIONS: NextBestAction[] = [
-  { rank: 1, title: "Call Madison Apartment Group (Heat 95)", channel: "Nooks", reason: "P0 reply + warm" },
-  { rank: 2, title: "Follow up Globex (cold 4 days)", channel: "Mixmax", reason: "re-engage sequence" },
-  { rank: 3, title: "Warm Jane Doe's feed before outreach", channel: "LinkedIn", reason: "warmth 0.22 → build" },
+  {
+    rank: 1,
+    title: "Call Madison Apartment Group (Heat 95)",
+    channel: "Nooks",
+    reason: "P0 reply + warm",
+  },
+  {
+    rank: 2,
+    title: "Follow up Globex (cold 4 days)",
+    channel: "Mixmax",
+    reason: "re-engage sequence",
+  },
+  {
+    rank: 3,
+    title: "Warm Jane Doe's feed before outreach",
+    channel: "LinkedIn",
+    reason: "warmth 0.22 → build",
+  },
 ];
 
 export const PIPELINE_STAGES = [
@@ -101,7 +116,10 @@ export const CHANNELS: ChannelHealth[] = [
 ];
 
 /** Scenario heartbeat status per agent id (for the roster column). */
-export const AGENT_RUNTIME: Record<string, { lastRun?: string; queue?: string }> = {
+export const AGENT_RUNTIME: Record<
+  string,
+  { lastRun?: string; queue?: string }
+> = {
   "signal-router": { lastRun: "5s" },
   "intel-director": { lastRun: "2m" },
   "content-strategist": { lastRun: "4m" },

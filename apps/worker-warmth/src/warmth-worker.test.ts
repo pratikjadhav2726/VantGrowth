@@ -94,7 +94,11 @@ describe("WarmthWorker", () => {
     const eventPublisher: EventPublisher = {
       publish: vi.fn(async () => undefined),
     };
-    const worker = new WarmthWorker({ outboxRepository, eventPublisher });
+    const worker = new WarmthWorker({
+      outboxRepository,
+      eventPublisher,
+      now: () => new Date("2026-04-28T00:00:00.000Z"),
+    });
 
     const result = await worker.process({
       tenantId,
@@ -130,6 +134,7 @@ describe("WarmthWorker", () => {
     const worker = new WarmthWorker({
       outboxRepository,
       eventPublisher: { publish: vi.fn(async () => undefined) },
+      now: () => new Date("2026-04-28T00:00:00.000Z"),
     });
 
     const request = {

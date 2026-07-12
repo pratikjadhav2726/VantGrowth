@@ -45,11 +45,17 @@ export default function AgentsPage() {
           notices it and instantly wakes the right agent to act.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-600">
-          <span className="rounded-full bg-gray-100 px-3 py-1">Something happens</span>
+          <span className="rounded-full bg-gray-100 px-3 py-1">
+            Something happens
+          </span>
           <span className="text-gray-300">→</span>
-          <span className="rounded-full bg-gray-100 px-3 py-1">Heartbeat notices</span>
+          <span className="rounded-full bg-gray-100 px-3 py-1">
+            Heartbeat notices
+          </span>
           <span className="text-gray-300">→</span>
-          <span className="rounded-full bg-gray-100 px-3 py-1">Routed by urgency</span>
+          <span className="rounded-full bg-gray-100 px-3 py-1">
+            Routed by urgency
+          </span>
           <span className="text-gray-300">→</span>
           <span className="rounded-full bg-brand-50 px-3 py-1 font-medium text-brand-700">
             The right agent acts
@@ -84,7 +90,9 @@ export default function AgentsPage() {
                           <h3 className="text-sm font-semibold text-gray-900 leading-tight group-hover:text-brand-700">
                             {agent.name}
                           </h3>
-                          <p className="text-xs text-gray-400">{agent.motion}</p>
+                          <p className="text-xs text-gray-400">
+                            {agent.motion}
+                          </p>
                         </div>
                       </div>
                       <span className="flex items-center gap-1.5">

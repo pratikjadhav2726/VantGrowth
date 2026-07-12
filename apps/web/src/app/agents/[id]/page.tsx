@@ -37,10 +37,7 @@ export default async function AgentDetailPage({
   return (
     <div className="mx-auto max-w-4xl">
       {/* Breadcrumb */}
-      <Link
-        href="/agents"
-        className="text-sm text-brand-600 hover:underline"
-      >
+      <Link href="/agents" className="text-sm text-brand-600 hover:underline">
         ← All agents
       </Link>
 
@@ -60,7 +57,10 @@ export default async function AgentDetailPage({
           </div>
         </div>
         <span className="flex items-center gap-2">
-          <span className={`h-2.5 w-2.5 rounded-full ${meta.dot}`} aria-hidden />
+          <span
+            className={`h-2.5 w-2.5 rounded-full ${meta.dot}`}
+            aria-hidden
+          />
           <StatusBadge variant={meta.badge} label={meta.label} />
         </span>
       </div>
@@ -71,7 +71,9 @@ export default async function AgentDetailPage({
       <section className="mt-8 rounded-xl border border-brand-200 bg-brand-50/40 p-5">
         <div className="flex items-center gap-2">
           <span className="text-lg">⏰</span>
-          <h2 className="text-sm font-semibold text-gray-900">How it wakes up</h2>
+          <h2 className="text-sm font-semibold text-gray-900">
+            How it wakes up
+          </h2>
           <span className="ml-auto rounded-full bg-white px-2.5 py-0.5 text-xs font-medium text-brand-700 ring-1 ring-inset ring-brand-200">
             {WAKE_LABEL[agent.wakeUp.kind]}
           </span>
@@ -108,7 +110,10 @@ export default async function AgentDetailPage({
           </h2>
           <ul className="mt-3 space-y-2">
             {agent.consumes.map((c) => (
-              <li key={c} className="flex items-start gap-2 text-sm text-gray-700">
+              <li
+                key={c}
+                className="flex items-start gap-2 text-sm text-gray-700"
+              >
                 <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-400" />
                 <span>{c}</span>
               </li>
@@ -121,7 +126,10 @@ export default async function AgentDetailPage({
           </h2>
           <ul className="mt-3 space-y-2">
             {agent.produces.map((p) => (
-              <li key={p} className="flex items-start gap-2 text-sm text-gray-700">
+              <li
+                key={p}
+                className="flex items-start gap-2 text-sm text-gray-700"
+              >
                 <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
                 <span>{p}</span>
               </li>
@@ -139,7 +147,10 @@ export default async function AgentDetailPage({
             </h2>
             <dl className="mt-3 space-y-2">
               {agent.knobs.map((k) => (
-                <div key={k.label} className="flex items-center justify-between text-sm">
+                <div
+                  key={k.label}
+                  className="flex items-center justify-between text-sm"
+                >
                   <dt className="text-gray-600">{k.label}</dt>
                   <dd className="font-mono text-xs font-medium text-gray-900">
                     {k.value}
@@ -158,19 +169,25 @@ export default async function AgentDetailPage({
             {agent.pipeline && (
               <div className="flex items-center justify-between">
                 <span className="text-gray-600">Pipeline</span>
-                <span className="font-medium text-gray-900">{agent.pipeline}</span>
+                <span className="font-medium text-gray-900">
+                  {agent.pipeline}
+                </span>
               </div>
             )}
             <div className="flex items-center justify-between">
               <span className="text-gray-600">Uses LLM</span>
               <span className="font-medium text-gray-900">
-                {agent.llm?.used ? (agent.llm.model ?? "yes") : "no (deterministic)"}
+                {agent.llm?.used
+                  ? (agent.llm.model ?? "yes")
+                  : "no (deterministic)"}
               </span>
             </div>
             {agent.llm?.fallback && (
               <div className="flex items-center justify-between">
                 <span className="text-gray-600">If AI is unavailable</span>
-                <span className="text-xs text-gray-500">{agent.llm.fallback}</span>
+                <span className="text-xs text-gray-500">
+                  {agent.llm.fallback}
+                </span>
               </div>
             )}
           </div>
@@ -187,27 +204,34 @@ export default async function AgentDetailPage({
             {agent.technical.trigger && (
               <div>
                 <dt className="text-gray-400">trigger</dt>
-                <dd className="break-all text-gray-700">{agent.technical.trigger}</dd>
+                <dd className="break-all text-gray-700">
+                  {agent.technical.trigger}
+                </dd>
               </div>
             )}
             {agent.technical.queueGroup && (
               <div>
                 <dt className="text-gray-400">queue group</dt>
-                <dd className="break-all text-gray-700">{agent.technical.queueGroup}</dd>
-              </div>
-            )}
-            {agent.technical.produces && agent.technical.produces.length > 0 && (
-              <div>
-                <dt className="text-gray-400">emits</dt>
                 <dd className="break-all text-gray-700">
-                  {agent.technical.produces.join(", ")}
+                  {agent.technical.queueGroup}
                 </dd>
               </div>
             )}
+            {agent.technical.produces &&
+              agent.technical.produces.length > 0 && (
+                <div>
+                  <dt className="text-gray-400">emits</dt>
+                  <dd className="break-all text-gray-700">
+                    {agent.technical.produces.join(", ")}
+                  </dd>
+                </div>
+              )}
             {agent.technical.sourceFile && (
               <div>
                 <dt className="text-gray-400">source</dt>
-                <dd className="break-all text-gray-700">{agent.technical.sourceFile}</dd>
+                <dd className="break-all text-gray-700">
+                  {agent.technical.sourceFile}
+                </dd>
               </div>
             )}
           </dl>

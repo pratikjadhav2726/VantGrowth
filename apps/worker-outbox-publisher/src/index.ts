@@ -1,4 +1,5 @@
 import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
+import { N8nDispatchClient } from "@growthos/n8n";
 import { createLogger, initOtelSdk } from "@growthos/observability";
 import {
   PostgresCycleLeaseGuard,
@@ -10,6 +11,23 @@ import { OutboxPublisher, runtimeConfigFromEnv } from "./outbox-publisher.js";
 import { OutboxPublisherRunner } from "./runner.js";
 
 const log = createLogger("growthos.worker-outbox-publisher");
+
+const resolveN8nDispatchClient = (): N8nDispatchClient | null => {
+  const webhookUrl = process.env.N8N_DISPATCH_WEBHOOK_URL;
+  if (!webhookUrl) return null;
+
+  const configuredTimeoutMs = process.env.N8N_TIMEOUT_MS
+    ? Number(process.env.N8N_TIMEOUT_MS)
+    : 10_000;
+
+  return new N8nDispatchClient({
+    webhookUrl,
+    timeoutMs:
+      Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+        ? configuredTimeoutMs
+        : 10_000,
+  });
+};
 
 export const createOutboxPublisherFromEnv = async (): Promise<{
   publisher: OutboxPublisher;
@@ -23,6 +41,7 @@ export const createOutboxPublisherFromEnv = async (): Promise<{
   const publisher = new OutboxPublisher({
     outboxRepository,
     eventPublisher,
+    n8nDispatchClient: resolveN8nDispatchClient(),
   });
   const runtimeConfig = runtimeConfigFromEnv();
 

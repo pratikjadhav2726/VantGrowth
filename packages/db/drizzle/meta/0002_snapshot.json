@@ -197,11 +197,7 @@
         "event_outbox_idempotency_unique": {
           "name": "event_outbox_idempotency_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "event_type",
-            "idempotency_key"
-          ]
+          "columns": ["tenant_id", "event_type", "idempotency_key"]
         }
       },
       "policies": {},
@@ -400,12 +396,8 @@
           "tableFrom": "motion_stack",
           "tableTo": "motion_scores",
           "schemaTo": "growthos",
-          "columnsFrom": [
-            "source_score_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_score_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -415,10 +407,7 @@
         "motion_stack_tenant_version_unique": {
           "name": "motion_stack_tenant_version_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "version"
-          ]
+          "columns": ["tenant_id", "version"]
         }
       },
       "policies": {},
@@ -534,11 +523,7 @@
         "playbook_versions_tenant_type_version_unique": {
           "name": "playbook_versions_tenant_type_version_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "playbook_type",
-            "version"
-          ]
+          "columns": ["tenant_id", "playbook_type", "version"]
         }
       },
       "policies": {},
@@ -820,10 +805,7 @@
         "workflow_runs_tenant_workflow_unique": {
           "name": "workflow_runs_tenant_workflow_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "workflow_id"
-          ]
+          "columns": ["tenant_id", "workflow_id"]
         }
       },
       "policies": {},

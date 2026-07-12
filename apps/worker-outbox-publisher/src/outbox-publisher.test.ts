@@ -89,6 +89,85 @@ describe("OutboxPublisher", () => {
     });
     expect(publish).toHaveBeenCalledTimes(2);
   });
+
+  it("dispatches n8n requests through the n8n client instead of NATS", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const publish = vi.fn(async () => undefined);
+    const dispatch = vi.fn(async () => ({
+      ok: true as const,
+      status: 202,
+      body: { accepted: true },
+    }));
+    const publisher = new OutboxPublisher({
+      outboxRepository,
+      eventPublisher: { publish },
+      n8nDispatchClient: { dispatch },
+    });
+
+    await outboxRepository.enqueue({
+      tenantId: tenantA,
+      eventType: "n8n.dispatch.requested.v1",
+      idempotencyKey: "act-1",
+      payload: {
+        tenantId: tenantA,
+        actionId: "act-1",
+        actionType: "send_email",
+        approvedBy: "founder",
+        idempotencyKey: "act-1",
+        payload: { to: "buyer@example.com" },
+      },
+    });
+
+    const publishedCount = await publisher.publishPendingForTenant(tenantA, 50);
+    const remaining = await outboxRepository.listUnconsumed(tenantA, 50);
+
+    expect(publishedCount).toBe(1);
+    expect(publish).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: "act-1",
+        idempotencyKey: "act-1",
+      }),
+    );
+    expect(remaining).toHaveLength(0);
+  });
+
+  it("keeps retryable n8n dispatch failures unconsumed", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const publisher = new OutboxPublisher({
+      outboxRepository,
+      eventPublisher: { publish: vi.fn(async () => undefined) },
+      n8nDispatchClient: {
+        dispatch: vi.fn(async () => ({
+          ok: false as const,
+          status: 503,
+          error: "n8n unavailable",
+          retryable: true,
+        })),
+      },
+    });
+
+    await outboxRepository.enqueue({
+      tenantId: tenantA,
+      eventType: "n8n.dispatch.requested.v1",
+      idempotencyKey: "act-2",
+      payload: {
+        tenantId: tenantA,
+        actionId: "act-2",
+        actionType: "send_email",
+        approvedBy: "founder",
+        idempotencyKey: "act-2",
+        payload: {},
+      },
+    });
+
+    await expect(
+      publisher.publishPendingForTenant(tenantA, 50),
+    ).rejects.toThrow("Retryable n8n dispatch failure");
+
+    const remaining = await outboxRepository.listUnconsumed(tenantA, 50);
+    expect(remaining).toHaveLength(1);
+  });
 });
 
 describe("runtimeConfigFromEnv", () => {

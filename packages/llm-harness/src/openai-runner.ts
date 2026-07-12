@@ -23,6 +23,7 @@ import type {
   LlmCallResult,
   LlmCallRunOptions,
   LlmCallRunner,
+  LlmResponseFormat,
 } from "./llm-call-runner.js";
 import type { PromptTemplate } from "./prompt-template.js";
 
@@ -98,6 +99,21 @@ const withRetry = async <T>(
     }
   }
   throw lastErr;
+};
+
+const toOpenAiResponseFormat = (
+  responseFormat: LlmResponseFormat | undefined,
+): Record<string, unknown> | undefined => {
+  if (!responseFormat || responseFormat.type === "text") return undefined;
+  if (responseFormat.type === "json_object") return { type: "json_object" };
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: responseFormat.name,
+      schema: responseFormat.schema,
+      strict: responseFormat.strict ?? true,
+    },
+  };
 };
 
 // ---------------------------------------------------------------------------
@@ -193,6 +209,7 @@ export class OpenAiLlmCallRunner implements LlmCallRunner {
     const retries = options?.retries ?? this.config.defaultRetries;
     const retryBaseDelayMs =
       options?.retryBaseDelayMs ?? this.config.defaultRetryBaseDelayMs;
+    const responseFormat = toOpenAiResponseFormat(options?.responseFormat);
 
     const userMessage = template.render(vars);
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
@@ -204,6 +221,11 @@ export class OpenAiLlmCallRunner implements LlmCallRunner {
     const span = this.tracer.startSpan("llm.chat.completions", {
       kind: SpanKind.CLIENT,
       attributes: {
+        "gen_ai.provider.name": "openai",
+        "gen_ai.request.model": model,
+        "gen_ai.operation.name": "chat",
+        "gen_ai.prompt.id": template.id,
+        "gen_ai.prompt.version": template.version,
         "llm.model": model,
         "llm.prompt_id": template.id,
         "llm.prompt_version": template.version,
@@ -221,6 +243,9 @@ export class OpenAiLlmCallRunner implements LlmCallRunner {
             messages,
             temperature,
             max_tokens: maxTokens,
+            ...(responseFormat
+              ? { response_format: responseFormat as never }
+              : {}),
           }),
         retries,
         retryBaseDelayMs,
@@ -239,8 +264,17 @@ export class OpenAiLlmCallRunner implements LlmCallRunner {
 
       const costUsd = estimateCost(model, inputTokens, outputTokens);
       const content = response.choices[0]?.message?.content ?? "";
+      const finishReasons = response.choices
+        .map((choice) => choice.finish_reason)
+        .filter((reason) => Boolean(reason));
 
       span.setAttributes({
+        "gen_ai.usage.input_tokens": inputTokens,
+        "gen_ai.usage.output_tokens": outputTokens,
+        "gen_ai.response.finish_reasons": finishReasons,
+        "gen_ai.request.response_format":
+          options?.responseFormat?.type ?? "text",
+        "gen_ai.client.operation.duration": latencyMs,
         "llm.input_tokens": inputTokens,
         "llm.output_tokens": outputTokens,
         "llm.latency_ms": latencyMs,

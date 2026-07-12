@@ -147,17 +147,27 @@ export class HttpZitadelClient implements ZitadelClient {
     } catch (err) {
       clearTimeout(timer);
       if ((err as Error).name === "AbortError")
-        throw new Error(`Zitadel request timed out after ${this.timeoutMs}ms: ${path}`);
+        throw new Error(
+          `Zitadel request timed out after ${this.timeoutMs}ms: ${path}`,
+        );
       throw err;
     }
   }
 
-  async createOrg(params: { name: string; primaryDomain?: string }): Promise<ZitadelOrg> {
+  async createOrg(params: {
+    name: string;
+    primaryDomain?: string;
+  }): Promise<ZitadelOrg> {
     type CreateOrgResponse = { orgId?: string; createdAt?: string };
     const { status, json } = await this.request<CreateOrgResponse>(
       "POST",
       "/admin/v1/orgs",
-      { name: params.name, ...(params.primaryDomain ? { primaryDomain: params.primaryDomain } : {}) },
+      {
+        name: params.name,
+        ...(params.primaryDomain
+          ? { primaryDomain: params.primaryDomain }
+          : {}),
+      },
     );
 
     // 409 Conflict = org already exists — look it up by name
@@ -166,19 +176,40 @@ export class HttpZitadelClient implements ZitadelClient {
     }
 
     if (status !== 200 && status !== 201) {
-      throw new Error(`Zitadel createOrg failed (${status}): ${JSON.stringify(json)}`);
+      throw new Error(
+        `Zitadel createOrg failed (${status}): ${JSON.stringify(json)}`,
+      );
     }
 
-    if (!json.orgId) throw new Error("Zitadel createOrg response missing orgId");
-    return { orgId: json.orgId, name: params.name, state: "ORG_STATE_ACTIVE", createdAt: json.createdAt };
+    if (!json.orgId)
+      throw new Error("Zitadel createOrg response missing orgId");
+    return {
+      orgId: json.orgId,
+      name: params.name,
+      state: "ORG_STATE_ACTIVE",
+      createdAt: json.createdAt,
+    };
   }
 
   async getOrg(orgId: string): Promise<ZitadelOrg | null> {
-    type GetOrgResponse = { org?: { id?: string; name?: string; primaryDomain?: string; state?: string; details?: { creationDate?: string } } };
-    const { status, json } = await this.request<GetOrgResponse>("GET", `/admin/v1/orgs/${orgId}`);
+    type GetOrgResponse = {
+      org?: {
+        id?: string;
+        name?: string;
+        primaryDomain?: string;
+        state?: string;
+        details?: { creationDate?: string };
+      };
+    };
+    const { status, json } = await this.request<GetOrgResponse>(
+      "GET",
+      `/admin/v1/orgs/${orgId}`,
+    );
     if (status === 404) return null;
     if (status !== 200)
-      throw new Error(`Zitadel getOrg ${orgId} failed (${status}): ${JSON.stringify(json)}`);
+      throw new Error(
+        `Zitadel getOrg ${orgId} failed (${status}): ${JSON.stringify(json)}`,
+      );
 
     const o = json.org;
     if (!o?.id) return null;
@@ -200,7 +231,11 @@ export class HttpZitadelClient implements ZitadelClient {
     const { status, json } = await this.request<CreateMachineResponse>(
       "POST",
       "/management/v1/machines",
-      { userName: params.userName, name: params.displayName, accessTokenType: "ACCESS_TOKEN_TYPE_JWT" },
+      {
+        userName: params.userName,
+        name: params.displayName,
+        accessTokenType: "ACCESS_TOKEN_TYPE_JWT",
+      },
       { "x-zitadel-orgid": params.orgId },
     );
 
@@ -210,34 +245,58 @@ export class HttpZitadelClient implements ZitadelClient {
     }
 
     if (status !== 200 && status !== 201)
-      throw new Error(`Zitadel createServiceAccount failed (${status}): ${JSON.stringify(json)}`);
+      throw new Error(
+        `Zitadel createServiceAccount failed (${status}): ${JSON.stringify(json)}`,
+      );
 
-    if (!json.userId) throw new Error("Zitadel createServiceAccount response missing userId");
-    return { userId: json.userId, userName: params.userName, orgId: params.orgId, createdAt: json.createdAt };
+    if (!json.userId)
+      throw new Error("Zitadel createServiceAccount response missing userId");
+    return {
+      userId: json.userId,
+      userName: params.userName,
+      orgId: params.orgId,
+      createdAt: json.createdAt,
+    };
   }
 
   async deleteOrg(orgId: string): Promise<void> {
-    const { status, json } = await this.request<unknown>("DELETE", `/admin/v1/orgs/${orgId}`);
+    const { status, json } = await this.request<unknown>(
+      "DELETE",
+      `/admin/v1/orgs/${orgId}`,
+    );
     if (status === 404 || status === 204 || status === 200) return;
-    throw new Error(`Zitadel deleteOrg ${orgId} failed (${status}): ${JSON.stringify(json)}`);
+    throw new Error(
+      `Zitadel deleteOrg ${orgId} failed (${status}): ${JSON.stringify(json)}`,
+    );
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
   private async findOrgByName(name: string): Promise<ZitadelOrg> {
     type SearchResponse = {
-      result?: Array<{ id?: string; name?: string; primaryDomain?: string; state?: string; details?: { creationDate?: string } }>;
+      result?: Array<{
+        id?: string;
+        name?: string;
+        primaryDomain?: string;
+        state?: string;
+        details?: { creationDate?: string };
+      }>;
     };
     const { status, json } = await this.request<SearchResponse>(
       "POST",
       "/admin/v1/orgs/_search",
-      { queries: [{ nameQuery: { name, method: "TEXT_QUERY_METHOD_EQUALS" } }] },
+      {
+        queries: [{ nameQuery: { name, method: "TEXT_QUERY_METHOD_EQUALS" } }],
+      },
     );
     if (status !== 200)
-      throw new Error(`Zitadel org search failed (${status}): ${JSON.stringify(json)}`);
+      throw new Error(
+        `Zitadel org search failed (${status}): ${JSON.stringify(json)}`,
+      );
 
     const match = json.result?.[0];
-    if (!match?.id) throw new Error(`Zitadel org not found after 409: name=${name}`);
+    if (!match?.id)
+      throw new Error(`Zitadel org not found after 409: name=${name}`);
     return {
       orgId: match.id,
       name: match.name ?? name,
@@ -247,21 +306,33 @@ export class HttpZitadelClient implements ZitadelClient {
     };
   }
 
-  private async findServiceAccount(orgId: string, userName: string): Promise<ZitadelServiceAccount> {
+  private async findServiceAccount(
+    orgId: string,
+    userName: string,
+  ): Promise<ZitadelServiceAccount> {
     type SearchResponse = {
       result?: Array<{ id?: string; userName?: string }>;
     };
     const { status, json } = await this.request<SearchResponse>(
       "POST",
       "/management/v1/users/_search",
-      { queries: [{ userNameQuery: { userName, method: "TEXT_QUERY_METHOD_EQUALS" } }] },
+      {
+        queries: [
+          { userNameQuery: { userName, method: "TEXT_QUERY_METHOD_EQUALS" } },
+        ],
+      },
       { "x-zitadel-orgid": orgId },
     );
     if (status !== 200)
-      throw new Error(`Zitadel user search failed (${status}): ${JSON.stringify(json)}`);
+      throw new Error(
+        `Zitadel user search failed (${status}): ${JSON.stringify(json)}`,
+      );
 
     const match = json.result?.[0];
-    if (!match?.id) throw new Error(`Zitadel service account not found after 409: userName=${userName}`);
+    if (!match?.id)
+      throw new Error(
+        `Zitadel service account not found after 409: userName=${userName}`,
+      );
     return { userId: match.id, userName: match.userName ?? userName, orgId };
   }
 }
@@ -277,10 +348,17 @@ export class StubZitadelClient implements ZitadelClient {
   private orgs = new Map<string, ZitadelOrg>();
   private accounts = new Map<string, ZitadelServiceAccount>();
 
-  async createOrg(params: Parameters<ZitadelClient["createOrg"]>[0]): Promise<ZitadelOrg> {
+  async createOrg(
+    params: Parameters<ZitadelClient["createOrg"]>[0],
+  ): Promise<ZitadelOrg> {
     this.createOrgCalls.push(params);
     const orgId = `zitadel-org-${params.name.toLowerCase().replace(/\s+/g, "-")}`;
-    const org: ZitadelOrg = { orgId, name: params.name, state: "ORG_STATE_ACTIVE", createdAt: new Date().toISOString() };
+    const org: ZitadelOrg = {
+      orgId,
+      name: params.name,
+      state: "ORG_STATE_ACTIVE",
+      createdAt: new Date().toISOString(),
+    };
     this.orgs.set(orgId, org);
     return org;
   }
@@ -289,9 +367,16 @@ export class StubZitadelClient implements ZitadelClient {
     return this.orgs.get(orgId) ?? null;
   }
 
-  async createServiceAccount(params: Parameters<ZitadelClient["createServiceAccount"]>[0]): Promise<ZitadelServiceAccount> {
+  async createServiceAccount(
+    params: Parameters<ZitadelClient["createServiceAccount"]>[0],
+  ): Promise<ZitadelServiceAccount> {
     const userId = `zitadel-sa-${params.userName}`;
-    const account: ZitadelServiceAccount = { userId, userName: params.userName, orgId: params.orgId, createdAt: new Date().toISOString() };
+    const account: ZitadelServiceAccount = {
+      userId,
+      userName: params.userName,
+      orgId: params.orgId,
+      createdAt: new Date().toISOString(),
+    };
     this.accounts.set(userId, account);
     return account;
   }

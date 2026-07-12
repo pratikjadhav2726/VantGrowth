@@ -1,6 +1,6 @@
 # GrowthOS v4 — Implementation Plan
 
-**Companion to:** `Growthos_v4.md`, `Growthos_v4_Technical_Architecture.md`, `Growthos_v4_Stack_Decisions.md`, `paperclip_guide.md`, `anatomy_of_agentic_harness.md`, `SmarterMCP_guide.md`
+**Companion to:** `Growthos_v4.md`, `Growthos_v4_Technical_Architecture.md`, `Growthos_v4_Stack_Decisions.md`, `paperclip_guide.md`, `anatomy_of_agentic_harness.md`, `SmarterMCP_guide.md` (disabled legacy reference)
 **Audience:** Founder, platform engineering lead, design lead
 **Status:** Sequenced, gated, opinionated build plan
 
@@ -41,7 +41,7 @@ These are CI-enforced where possible, code-review-enforced otherwise. PRs that v
 - Test rule: a "replay every job twice" chaos test runs nightly; any double-side-effect is a P0 bug.
 
 ### 1.4 Backpressure as a first-class design concern
-- Per-tenant rate limits at every layer: API, NATS subject, dispatch queue, SmarterMCP session, LLM calls.
+- Per-tenant rate limits at every layer: API, NATS subject, dispatch queue, n8n dispatch boundary, LLM calls.
 - Backpressure means **demotion**, not drop. P1 signals demote to P2 when the queue saturates; P3 demotes to digest. The founder sees a banner; nothing is lost.
 - One bad tenant cannot exhaust shared resources. Budget caps + rate limits + per-tenant connection slots enforce this structurally.
 
@@ -91,7 +91,7 @@ These are CI-enforced where possible, code-review-enforced otherwise. PRs that v
 - A feature flag without an expiration date is a P2 issue.
 
 ### 1.14 No reflection on agent intent
-- Agents do not call into platform internals. They go through Paperclip MCP tools, SmarterMCP tools, or our domain MCP servers.
+- Agents do not call into platform internals. They go through Paperclip/governed GrowthOS contracts; external SaaS access is delegated to n8n workflows.
 - Direct DB access from an LLM-touched code path is forbidden — caught by a CI grep on the adapter package.
 
 ---
@@ -403,9 +403,9 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 - **LiteLLM proxy** self-hosted with Anthropic + OpenAI keys, per-tenant key scoping.
 - **Langfuse** self-hosted, OTel exporter wired.
 - **Promptfoo** in CI with a 10-prompt smoke set.
-- **SmarterMCP** deployed in dev; tenant + tool-pack provisioning scripts working.
+- **n8n connector fabric** deployed in dev; signed GrowthOS inbound webhook and approved dispatch webhook working.
 - **Daytona** (or E2B) sandbox provisioning script.
-- **Definition of done:** a CLI script can open a SmarterMCP session, run one tool call (search), get a response logged in Langfuse + SigNoz with a joined trace.
+- **Definition of done:** a CLI/scripted n8n workflow can send a signed signal to GrowthOS, receive an approved dispatch event through n8n, and preserve trace metadata in GrowthOS logs.
 
 #### Track E — Identity, billing, secrets, deploy
 - **Zitadel** deployed; org-per-tenant model defined.
@@ -426,10 +426,10 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 
 ### 3.2 Phase 0 exit criteria (all must pass)
 
-- [ ] `make e2e-smoke` runs end-to-end: provisions a tenant, runs a no-op heartbeat through Paperclip + SmarterMCP, writes an event to NATS, indexes in ClickHouse, surfaces in SigNoz trace, all under one OTel trace ID.
+- [ ] `make e2e-smoke` runs end-to-end: provisions a tenant, runs a no-op heartbeat through Paperclip + n8n, writes an event to NATS, indexes in ClickHouse, surfaces in SigNoz trace, all under one OTel trace ID.
 - [ ] RLS suite (generated, ~20 tests against stub tables) passes on every PR.
 - [ ] One full deploy via Argo CD with rollback rehearsal.
-- [ ] Runbook doc exists for: NATS leader loss, Postgres failover, Restate crash, SmarterMCP outage, OpenBao seal/unseal.
+- [ ] Runbook doc exists for: NATS leader loss, Postgres failover, Restate crash, n8n outage, OpenBao seal/unseal.
 
 ---
 
@@ -443,7 +443,7 @@ This section tracks what is already implemented in the `GTM` repo so execution s
 
 | Sprint (2w) | Track | Deliverable |
 |---|---|---|
-| S1 | Adapter | `growthos_native` Paperclip adapter scaffolding. Pulls agent context, opens SmarterMCP session, runs ReAct loop with one stub agent. Writes outputs back to Paperclip issue documents. Emits cost_events. |
+| S1 | Adapter | `growthos_native` Paperclip adapter scaffolding. Pulls agent context, runs one stub agent through GrowthOS domain contracts, and uses n8n only for signed inbound signals / approved dispatch. Writes outputs back to Paperclip issue documents. Emits cost_events. |
 | S1 | Domain | Tenant provisioning Restate workflow: Zitadel org → Paperclip company → Gitea repo from template → NATS subjects → MinIO bucket → seed `FOUNDER.md`. Idempotent. |
 | S2 | Domain | Motion Engine v1: scorer (deterministic, version-stamped), stack selector, agent resolver, skills resolver. Skill manifest format finalized; skills library v0 (5 files) seeded. |
 | S2 | UI | Design system v0: tokens, primitives, command-menu, layout shell. Storybook + Chromatic in CI. Onboarding wizard skeleton (5 steps, no real forms yet). |
@@ -608,7 +608,7 @@ Anything off this path can slip a sprint without delaying Phase 1 exit.
 | Risk | Owner | Mitigation |
 |---|---|---|
 | Paperclip upstream breaks RLS PR | Platform | RLS as orthogonal column+policies layer; weekly sync rehearsal in Phase 0 |
-| Adapter ReAct loop costs blow up | Domain | Per-run budget cap in SmarterMCP session; cost_events alerted at >$5/run |
+| Adapter ReAct loop costs blow up | Domain | Per-run budget cap in the adapter/LLM router; cost_events alerted at >$5/run; n8n dispatch is bounded by approval/rate-limit policy |
 | Approval queue feels generic | Designer | Weekly UX critique with Linear/Raycast as rubric; Storybook visual diff in CI |
 | Confidence scoring uncalibrated → founder distrust | Domain + ML | Daily calibration job from Phase 1; conservative auto-approve unlock |
 | Learning Director proposes bad changes | Domain | Hard approval gate + revalidation + rollback any playbook version in one SQL |
@@ -680,7 +680,7 @@ CI runs scaled-down versions; nightly load tests assert full numbers.
 ### 11.3 Nightly (non-blocking, paged on repeated failure)
 
 - Load suite (six scenarios)
-- SmarterMCP contract test against staging
+- n8n connector contract test against staging
 - Promptfoo eval suite + Langfuse dataset replay
 - Calibration + decay + claim-freshness jobs
 - Cross-tenant red-team probe

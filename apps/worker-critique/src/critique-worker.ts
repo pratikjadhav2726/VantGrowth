@@ -55,7 +55,9 @@ export const CRITIQUE_APPROVE_THRESHOLD = (() => {
 
 export const CRITIQUE_REVISE_THRESHOLD = (() => {
   const v = Number(process.env.CRITIQUE_REVISE_THRESHOLD);
-  return Number.isFinite(v) && v > 0 && v < CRITIQUE_APPROVE_THRESHOLD ? v : 0.5;
+  return Number.isFinite(v) && v > 0 && v < CRITIQUE_APPROVE_THRESHOLD
+    ? v
+    : 0.5;
 })();
 
 const verdictFromScore = (score: number): "approve" | "revise" | "reject" => {
@@ -198,7 +200,11 @@ export const critiqueWithLlm = async (
         candidateOutput: request.candidateOutput,
         rubricCriteria: rubricHint,
       },
-      { tenantId: request.tenantId, agentId: "critique-worker" },
+      {
+        tenantId: request.tenantId,
+        agentId: "critique-worker",
+        responseFormat: { type: "json_object" },
+      },
     );
     content = result.content;
   } catch {

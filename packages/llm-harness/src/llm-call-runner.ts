@@ -30,6 +30,14 @@ export interface LlmCallRunOptions {
   /** Base delay for exponential backoff in ms. Default: 500 */
   retryBaseDelayMs?: number;
   /**
+   * Provider-native structured-output mode.
+   *
+   * Prefer this over prompt-only "return JSON" instructions when the target
+   * model supports it. `json_schema` maps to OpenAI's strict structured output
+   * response format; `json_object` maps to JSON mode.
+   */
+  responseFormat?: LlmResponseFormat;
+  /**
    * Tenant context — written to `llm_call_logs` via the configured LlmCallLogSink.
    * Required for production cost attribution. Omit only in tests.
    */
@@ -39,6 +47,16 @@ export interface LlmCallRunOptions {
   /** Paperclip issueId associated with this call (written to log row). */
   issueId?: string;
 }
+
+export type LlmResponseFormat =
+  | { type: "text" }
+  | { type: "json_object" }
+  | {
+      type: "json_schema";
+      name: string;
+      schema: Record<string, unknown>;
+      strict?: boolean;
+    };
 
 export interface LlmCallResult {
   /** Generated text content */
@@ -82,6 +100,7 @@ export type StubResponseFactory =
 export interface StubCall {
   templateId: string;
   vars: Record<string, unknown>;
+  options?: LlmCallRunOptions;
   result: LlmCallResult;
 }
 
@@ -128,6 +147,7 @@ export class StubLlmCallRunner implements LlmCallRunner {
     this.callHistory.push({
       templateId: template.id,
       vars: vars as Record<string, unknown>,
+      ...(options !== undefined ? { options } : {}),
       result,
     });
 

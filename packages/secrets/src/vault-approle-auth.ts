@@ -121,7 +121,8 @@ export class VaultAppRoleAuth {
       if (cached.renewable) {
         try {
           await this.renew(cached.token);
-          return this.cached!.token;
+          const renewed = this.cached;
+          if (renewed) return renewed.token;
         } catch {
           // Renewal failed (e.g. token revoked) — fall through to re-login.
           this.cached = null;
@@ -131,7 +132,11 @@ export class VaultAppRoleAuth {
 
     // Cache miss, expired, or renewal failed.
     await this.login();
-    return this.cached!.token;
+    const loggedIn = this.cached;
+    if (!loggedIn) {
+      throw new Error("Vault AppRole login did not cache a token");
+    }
+    return loggedIn.token;
   }
 
   private async vaultFetch(
@@ -190,9 +195,7 @@ export class VaultAppRoleAuth {
     ).auth;
 
     if (!auth?.client_token) {
-      throw new Error(
-        "Vault AppRole login response missing auth.client_token",
-      );
+      throw new Error("Vault AppRole login response missing auth.client_token");
     }
 
     const now = this.nowSeconds();
@@ -213,7 +216,9 @@ export class VaultAppRoleAuth {
     );
 
     if (status !== 200) {
-      throw new Error(`Vault token renewal failed (${status}): ${JSON.stringify(json)}`);
+      throw new Error(
+        `Vault token renewal failed (${status}): ${JSON.stringify(json)}`,
+      );
     }
 
     const auth = (

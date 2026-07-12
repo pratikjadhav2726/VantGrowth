@@ -179,12 +179,13 @@ export default async function MotionPage() {
 
       {/* ── How scoring works (plain) ───────────────────────────────── */}
       <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50/60 p-4 text-sm text-gray-600">
-        Every motion is scored 0–100 for <span className="font-medium text-gray-800">fit</span>{" "}
-        using your GTM signals — deal size, sales-cycle length, engagement data,
-        content capacity and market demand. The top two become{" "}
+        Every motion is scored 0–100 for{" "}
+        <span className="font-medium text-gray-800">fit</span> using your GTM
+        signals — deal size, sales-cycle length, engagement data, content
+        capacity and market demand. The top two become{" "}
         <span className="font-medium text-gray-800">Primary</span>, the next two{" "}
-        <span className="font-medium text-gray-800">Secondary</span>; the rest are
-        watched or paused.
+        <span className="font-medium text-gray-800">Secondary</span>; the rest
+        are watched or paused.
       </div>
 
       {/* ── Score grid ──────────────────────────────────────────────── */}

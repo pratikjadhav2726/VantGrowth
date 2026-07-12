@@ -82,7 +82,10 @@ export const MOTION_CATALOG: Record<string, MotionMeta> = {
 
 export type MotionTier = "Primary" | "Secondary" | "Observe" | "Off";
 
-export const TIER_META: Record<MotionTier, { badge: "approved" | "processing" | "neutral" | "rejected"; bar: string }> = {
+export const TIER_META: Record<
+  MotionTier,
+  { badge: "approved" | "processing" | "neutral" | "rejected"; bar: string }
+> = {
   Primary: { badge: "approved", bar: "bg-green-500" },
   Secondary: { badge: "processing", bar: "bg-blue-500" },
   Observe: { badge: "neutral", bar: "bg-amber-400" },
@@ -96,6 +99,8 @@ export function motionDisplay(label: string): MotionMeta {
       glyph: "•",
       drives: "—",
       agents: [],
+      why: "No scoring explanation is available for this motion yet.",
+      inputs: "No input signals configured",
     }
   );
 }

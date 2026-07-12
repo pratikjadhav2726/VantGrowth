@@ -202,7 +202,10 @@ async function sendViaPostal(
   const apiKey = env.POSTAL_API_KEY;
   const serverUrl = env.POSTAL_SERVER_URL;
   const fromEmail = env.POSTAL_FROM_EMAIL ?? "digest@growthos.io";
-  const timeoutMs = asPositiveInt(env.GROWTHOS_POSTAL_TIMEOUT_MS, DEFAULT_POSTAL_TIMEOUT_MS);
+  const timeoutMs = asPositiveInt(
+    env.GROWTHOS_POSTAL_TIMEOUT_MS,
+    DEFAULT_POSTAL_TIMEOUT_MS,
+  );
   const maxAttempts = asPositiveInt(
     env.GROWTHOS_POSTAL_MAX_ATTEMPTS,
     DEFAULT_POSTAL_MAX_ATTEMPTS,

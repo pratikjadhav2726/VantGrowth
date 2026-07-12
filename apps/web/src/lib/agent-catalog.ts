@@ -31,7 +31,13 @@ export interface AgentDef {
   id: string;
   name: string;
   glyph: string;
-  category: "Intelligence" | "Content" | "Quality" | "Outbound" | "Lifecycle" | "Infrastructure";
+  category:
+    | "Intelligence"
+    | "Content"
+    | "Quality"
+    | "Outbound"
+    | "Lifecycle"
+    | "Infrastructure";
   motion: string;
   tagline: string;
   status: AgentStatus;
@@ -55,7 +61,8 @@ export const AGENTS: AgentDef[] = [
     glyph: "⇄",
     category: "Intelligence",
     motion: "All motions",
-    tagline: "The front door — sorts every incoming signal by urgency and sends it to the right agent.",
+    tagline:
+      "The front door — sorts every incoming signal by urgency and sends it to the right agent.",
     status: "active",
     wakeUp: {
       kind: "call",
@@ -63,9 +70,15 @@ export const AGENTS: AgentDef[] = [
         "Wakes the instant any new signal arrives — an email reply, a call outcome, a competitor move, a community mention. It decides how urgent the signal is and which agent should handle it.",
       trigger: "Whenever a new signal arrives from any channel",
     },
-    consumes: ["New signals from email, calls, social, competitors and the web"],
+    consumes: [
+      "New signals from email, calls, social, competitors and the web",
+    ],
     produces: ["A prioritized signal handed to the right agent"],
-    llm: { used: true, model: "AI-assisted grading (optional)", fallback: "instant rule-based routing" },
+    llm: {
+      used: true,
+      model: "AI-assisted grading (optional)",
+      fallback: "instant rule-based routing",
+    },
     howItWorks: [
       "A new signal arrives and is de-duplicated so nothing is counted twice.",
       "It is graded for urgency in a fraction of a second and matched to the right agent.",
@@ -92,7 +105,8 @@ export const AGENTS: AgentDef[] = [
     glyph: "🛰",
     category: "Intelligence",
     motion: "Inbound · Community",
-    tagline: "Competitor search & track — turns market and competitor activity into a clear brief.",
+    tagline:
+      "Competitor search & track — turns market and competitor activity into a clear brief.",
     status: "active",
     wakeUp: {
       kind: "event",
@@ -100,9 +114,17 @@ export const AGENTS: AgentDef[] = [
         "Wakes on the weekly market sweep, or immediately when the Signal Router flags a competitor move. It then researches what's changing and writes a brief.",
       trigger: "Weekly, or instantly when a competitor makes a move",
     },
-    consumes: ["Competitor activity, community discussion, and your market positioning"],
-    produces: ["An intelligence brief: what changed, why it matters, and recommended plays"],
-    llm: { used: true, model: "AI-generated brief", fallback: "structured baseline brief" },
+    consumes: [
+      "Competitor activity, community discussion, and your market positioning",
+    ],
+    produces: [
+      "An intelligence brief: what changed, why it matters, and recommended plays",
+    ],
+    llm: {
+      used: true,
+      model: "AI-generated brief",
+      fallback: "structured baseline brief",
+    },
     howItWorks: [
       "Triggered by the weekly sweep or a flagged competitor move.",
       "Gathers competitor signals (pricing, launches, reviews) and community chatter for the period.",
@@ -126,16 +148,24 @@ export const AGENTS: AgentDef[] = [
     glyph: "✍",
     category: "Content",
     motion: "Inbound",
-    tagline: "Turns each intel opportunity into a briefed, ready-to-write content plan.",
+    tagline:
+      "Turns each intel opportunity into a briefed, ready-to-write content plan.",
     status: "active",
     wakeUp: {
       kind: "chain",
-      summary: "Runs automatically the moment the Intel Director finishes a brief.",
+      summary:
+        "Runs automatically the moment the Intel Director finishes a brief.",
       trigger: "Automatically, as soon as an intel brief is ready",
     },
     consumes: ["An intelligence brief"],
-    produces: ["A content plan: outline, keywords, tone, audience and call-to-action"],
-    llm: { used: true, model: "AI-generated plan", fallback: "structured outline" },
+    produces: [
+      "A content plan: outline, keywords, tone, audience and call-to-action",
+    ],
+    llm: {
+      used: true,
+      model: "AI-generated plan",
+      fallback: "structured outline",
+    },
     howItWorks: [
       "Takes each opportunity from the intel brief.",
       "Builds a content plan with outline, keywords, tone, target persona and CTA.",
@@ -146,7 +176,8 @@ export const AGENTS: AgentDef[] = [
       trigger: "intel_brief.v1",
       queueGroup: "growthos-worker-content-strategist",
       produces: ["content_opportunity.v1", "content_brief.v1"],
-      sourceFile: "apps/worker-content-strategist/src/content-strategist-worker.ts",
+      sourceFile:
+        "apps/worker-content-strategist/src/content-strategist-worker.ts",
     },
   },
   {
@@ -155,16 +186,24 @@ export const AGENTS: AgentDef[] = [
     glyph: "📝",
     category: "Content",
     motion: "Inbound",
-    tagline: "Writes the full draft from a content plan, with built-in quality checks.",
+    tagline:
+      "Writes the full draft from a content plan, with built-in quality checks.",
     status: "active",
     wakeUp: {
       kind: "chain",
-      summary: "Runs automatically once the Content Strategist finishes a plan.",
+      summary:
+        "Runs automatically once the Content Strategist finishes a plan.",
       trigger: "Automatically, once a content plan is ready",
     },
     consumes: ["A content plan"],
-    produces: ["A finished draft with quality checks (CTA, structure, readability)"],
-    llm: { used: true, model: "AI-written draft", fallback: "structured skeleton" },
+    produces: [
+      "A finished draft with quality checks (CTA, structure, readability)",
+    ],
+    llm: {
+      used: true,
+      model: "AI-written draft",
+      fallback: "structured skeleton",
+    },
     howItWorks: [
       "Takes the plan's outline and writes the full piece.",
       "Runs quality checks: call-to-action present, internal links, structure, readability.",
@@ -186,7 +225,8 @@ export const AGENTS: AgentDef[] = [
     glyph: "🔎",
     category: "Quality",
     motion: "All motions",
-    tagline: "An automatic second opinion — scores every draft and flags anything that needs a human.",
+    tagline:
+      "An automatic second opinion — scores every draft and flags anything that needs a human.",
     status: "active",
     wakeUp: {
       kind: "chain",
@@ -194,8 +234,14 @@ export const AGENTS: AgentDef[] = [
       trigger: "Every time a draft is produced",
     },
     consumes: ["Any drafted content, plus reviewer notes"],
-    produces: ["A confidence score and a verdict: approve, revise, or send to human review"],
-    llm: { used: true, model: "AI quality review", fallback: "rule-based scoring" },
+    produces: [
+      "A confidence score and a verdict: approve, revise, or send to human review",
+    ],
+    llm: {
+      used: true,
+      model: "AI quality review",
+      fallback: "rule-based scoring",
+    },
     howItWorks: [
       "Scores every draft for quality — checking call-to-action, evidence, length, structure and tone.",
       "High-confidence work can be auto-approved; anything weaker is routed to a human with the reasons attached.",
@@ -220,7 +266,8 @@ export const AGENTS: AgentDef[] = [
     glyph: "🧠",
     category: "Quality",
     motion: "All motions",
-    tagline: "The learning loop — turns your approvals and edits into a smarter playbook over time.",
+    tagline:
+      "The learning loop — turns your approvals and edits into a smarter playbook over time.",
     status: "active",
     wakeUp: {
       kind: "event",
@@ -229,7 +276,9 @@ export const AGENTS: AgentDef[] = [
       trigger: "Every time you approve, edit or reject something",
     },
     consumes: ["Your approval decisions and the quality reviews"],
-    produces: ["Proposed playbook improvements (shipped only with your consent)"],
+    produces: [
+      "Proposed playbook improvements (shipped only with your consent)",
+    ],
     llm: { used: false, fallback: "pattern detection across your decisions" },
     howItWorks: [
       "Watches how you respond to drafts. A rejection or heavy edit is a strong signal; an approve-with-no-edits confirms the current approach works.",
@@ -246,7 +295,10 @@ export const AGENTS: AgentDef[] = [
     technical: {
       trigger: "learning.signal.v1 + critique.completed.v1",
       queueGroup: "worker-learning",
-      produces: ["learning.candidate.synthesized.v1", "learning.playbook.updated.v1"],
+      produces: [
+        "learning.candidate.synthesized.v1",
+        "learning.playbook.updated.v1",
+      ],
       sourceFile: "apps/worker-learning/src/learning-worker.ts",
     },
   },
@@ -258,7 +310,8 @@ export const AGENTS: AgentDef[] = [
     glyph: "🔥",
     category: "Outbound",
     motion: "Warm Outbound",
-    tagline: "Tracks relationship warmth across LinkedIn, email and calls — and blocks cold outreach.",
+    tagline:
+      "Tracks relationship warmth across LinkedIn, email and calls — and blocks cold outreach.",
     status: "active",
     wakeUp: {
       kind: "call",
@@ -278,7 +331,10 @@ export const AGENTS: AgentDef[] = [
     knobs: [
       { label: "A meeting", value: "counts most" },
       { label: "A reply / content read", value: "counts a lot" },
-      { label: "LinkedIn comment / like / view", value: "counts progressively less" },
+      {
+        label: "LinkedIn comment / like / view",
+        value: "counts progressively less",
+      },
       { label: "Warmth fades over", value: "~2 weeks" },
     ],
     technical: {
@@ -293,7 +349,8 @@ export const AGENTS: AgentDef[] = [
     glyph: "🎯",
     category: "Outbound",
     motion: "Warm Outbound",
-    tagline: "When a prospect engages, it drafts the next message — grounded in the conversation and approved talking points.",
+    tagline:
+      "When a prospect engages, it drafts the next message — grounded in the conversation and approved talking points.",
     status: "planned",
     wakeUp: {
       kind: "event",
@@ -301,16 +358,25 @@ export const AGENTS: AgentDef[] = [
         "Wakes the moment a prospect replies on email or after a call. (The routing is already in place; the agent is the next build.)",
       trigger: "The moment a prospect replies",
     },
-    consumes: ["A prospect reply, the conversation history, and your approved messaging"],
+    consumes: [
+      "A prospect reply, the conversation history, and your approved messaging",
+    ],
     produces: ["A ready-to-review follow-up draft"],
-    llm: { used: true, model: "AI-drafted follow-up", fallback: "template draft" },
+    llm: {
+      used: true,
+      model: "AI-drafted follow-up",
+      fallback: "template draft",
+    },
     howItWorks: [
       "Triggered the instant a prospect replies on email or after a call.",
       "Pulls the conversation history, the deal context, and your compliance-approved talking points.",
       "Drafts the next message and sends it to the Approval Queue — never auto-sends regulated insurance content.",
       "Once you approve, it's queued into your email or calling tool.",
     ],
-    technical: { trigger: "signal.routed.v1 (target = warm_outbound_researcher)", sourceFile: "planned" },
+    technical: {
+      trigger: "signal.routed.v1 (target = warm_outbound_researcher)",
+      sourceFile: "planned",
+    },
   },
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
@@ -320,7 +386,8 @@ export const AGENTS: AgentDef[] = [
     glyph: "📈",
     category: "Lifecycle",
     motion: "Retention · Expansion",
-    tagline: "Spots expansion opportunities and early churn warnings across client portfolios.",
+    tagline:
+      "Spots expansion opportunities and early churn warnings across client portfolios.",
     status: "planned",
     wakeUp: {
       kind: "event",
@@ -329,14 +396,19 @@ export const AGENTS: AgentDef[] = [
       trigger: "When an account grows, a contact changes, or activity drops",
     },
     consumes: ["Portfolio growth, personnel changes, and engagement trends"],
-    produces: ["Expansion plays and early churn-risk alerts for the Success team"],
+    produces: [
+      "Expansion plays and early churn-risk alerts for the Success team",
+    ],
     llm: { used: true, model: "AI-drafted play", fallback: "rule-based play" },
     howItWorks: [
       "Notices when a client adds properties or units (e.g. Madison +1,200 units) and drafts an expansion play.",
       "Notices when a champion leaves and flags re-engagement.",
       "Notices when engagement drops vs. normal — an early churn warning, months before renewal.",
     ],
-    technical: { trigger: "account.expanded · champion.moved", sourceFile: "planned" },
+    technical: {
+      trigger: "account.expanded · champion.moved",
+      sourceFile: "planned",
+    },
   },
   {
     id: "community",
@@ -344,11 +416,13 @@ export const AGENTS: AgentDef[] = [
     glyph: "💬",
     category: "Lifecycle",
     motion: "Community",
-    tagline: "Monitors industry communities and drafts helpful, on-brand replies for approval.",
+    tagline:
+      "Monitors industry communities and drafts helpful, on-brand replies for approval.",
     status: "planned",
     wakeUp: {
       kind: "event",
-      summary: "Wakes when your brand or topic comes up in an industry community.",
+      summary:
+        "Wakes when your brand or topic comes up in an industry community.",
       trigger: "When your brand or topic comes up in a community",
     },
     consumes: ["Mentions and discussions in industry communities"],
@@ -359,7 +433,10 @@ export const AGENTS: AgentDef[] = [
       "Drafts a helpful, non-salesy reply grounded in your approved talking points.",
       "Sends it for approval before anything is posted.",
     ],
-    technical: { trigger: "community.mention · competitor.discussed", sourceFile: "planned" },
+    technical: {
+      trigger: "community.mention · competitor.discussed",
+      sourceFile: "planned",
+    },
   },
 
   // ─── Infrastructure ────────────────────────────────────────────────────────
@@ -369,7 +446,8 @@ export const AGENTS: AgentDef[] = [
     glyph: "⏱",
     category: "Infrastructure",
     motion: "Platform",
-    tagline: "The heartbeat that keeps everything moving — it's how every agent wakes up.",
+    tagline:
+      "The heartbeat that keeps everything moving — it's how every agent wakes up.",
     status: "active",
     wakeUp: {
       kind: "infra",
@@ -410,7 +488,10 @@ export function getAgent(id: string): AgentDef | undefined {
   return AGENTS.find((a) => a.id === id);
 }
 
-export const STATUS_META: Record<AgentStatus, { label: string; dot: string; badge: "approved" | "neutral" | "pending" }> = {
+export const STATUS_META: Record<
+  AgentStatus,
+  { label: string; dot: string; badge: "approved" | "neutral" | "pending" }
+> = {
   active: { label: "Live", dot: "bg-green-500", badge: "approved" },
   idle: { label: "Idle", dot: "bg-gray-400", badge: "neutral" },
   planned: { label: "Planned", dot: "bg-amber-500", badge: "pending" },

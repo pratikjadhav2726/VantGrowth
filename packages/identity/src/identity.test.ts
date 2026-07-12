@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HttpZitadelClient,
   StubZitadelClient,
@@ -9,13 +9,17 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const makeOrgResponse = (overrides: Partial<{ orgId: string; createdAt: string }> = {}) => ({
+const makeOrgResponse = (
+  overrides: Partial<{ orgId: string; createdAt: string }> = {},
+) => ({
   orgId: "zitadel-org-001",
   createdAt: "2026-01-01T00:00:00Z",
   ...overrides,
 });
 
-const makeGetOrgResponse = (overrides: Partial<{ id: string; name: string; state: string }> = {}) => ({
+const makeGetOrgResponse = (
+  overrides: Partial<{ id: string; name: string; state: string }> = {},
+) => ({
   org: {
     id: "zitadel-org-001",
     name: "Acme Corp",
@@ -68,19 +72,32 @@ describe("HttpZitadelClient", () => {
 
       const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
       expect(url).toContain("/admin/v1/orgs");
-      expect(JSON.parse(opts.body as string)).toMatchObject({ name: "Acme Corp" });
+      expect(JSON.parse(opts.body as string)).toMatchObject({
+        name: "Acme Corp",
+      });
     });
 
     it("returns existing org on 409 conflict", async () => {
       const searchResponse = {
         result: [
-          { id: "existing-org-999", name: "Acme Corp", state: "ORG_STATE_ACTIVE", details: { creationDate: "2025-01-01T00:00:00Z" } },
+          {
+            id: "existing-org-999",
+            name: "Acme Corp",
+            state: "ORG_STATE_ACTIVE",
+            details: { creationDate: "2025-01-01T00:00:00Z" },
+          },
         ],
       };
       const mockFetch = vi
         .fn()
-        .mockResolvedValueOnce({ status: 409, json: async () => ({ code: 6, message: "org already exists" }) })
-        .mockResolvedValueOnce({ status: 200, json: async () => searchResponse });
+        .mockResolvedValueOnce({
+          status: 409,
+          json: async () => ({ code: 6, message: "org already exists" }),
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          json: async () => searchResponse,
+        });
       vi.stubGlobal("fetch", mockFetch);
 
       const client = makeClient();
@@ -93,33 +110,44 @@ describe("HttpZitadelClient", () => {
     });
 
     it("throws on unexpected error status", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-        status: 500,
-        json: async () => ({ message: "internal error" }),
-      }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          status: 500,
+          json: async () => ({ message: "internal error" }),
+        }),
+      );
 
-      await expect(makeClient().createOrg({ name: "Fail Corp" })).rejects.toThrow("500");
+      await expect(
+        makeClient().createOrg({ name: "Fail Corp" }),
+      ).rejects.toThrow("500");
     });
   });
 
   describe("getOrg", () => {
     it("returns org when found", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-        status: 200,
-        json: async () => makeGetOrgResponse(),
-      }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          status: 200,
+          json: async () => makeGetOrgResponse(),
+        }),
+      );
 
       const org = await makeClient().getOrg("zitadel-org-001");
       expect(org).not.toBeNull();
-      expect(org!.orgId).toBe("zitadel-org-001");
-      expect(org!.name).toBe("Acme Corp");
+      expect(org?.orgId).toBe("zitadel-org-001");
+      expect(org?.name).toBe("Acme Corp");
     });
 
     it("returns null on 404", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-        status: 404,
-        json: async () => ({ code: 5, message: "org not found" }),
-      }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          status: 404,
+          json: async () => ({ code: 5, message: "org not found" }),
+        }),
+      );
 
       const org = await makeClient().getOrg("nonexistent");
       expect(org).toBeNull();
@@ -128,10 +156,13 @@ describe("HttpZitadelClient", () => {
 
   describe("createServiceAccount", () => {
     it("creates a machine user and returns account info", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-        status: 201,
-        json: async () => makeMachineResponse(),
-      }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          status: 201,
+          json: async () => makeMachineResponse(),
+        }),
+      );
 
       const client = makeClient();
       const account = await client.createServiceAccount({
@@ -152,32 +183,50 @@ describe("HttpZitadelClient", () => {
       });
       vi.stubGlobal("fetch", mockFetch);
 
-      await makeClient().createServiceAccount({ orgId: "org-456", userName: "sa", displayName: "SA" });
+      await makeClient().createServiceAccount({
+        orgId: "org-456",
+        userName: "sa",
+        displayName: "SA",
+      });
 
       const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
-      expect((opts.headers as Record<string, string>)["x-zitadel-orgid"]).toBe("org-456");
+      expect((opts.headers as Record<string, string>)["x-zitadel-orgid"]).toBe(
+        "org-456",
+      );
     });
   });
 
   describe("deleteOrg", () => {
     it("succeeds on 204", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 204, json: async () => ({}) }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({ status: 204, json: async () => ({}) }),
+      );
       await expect(makeClient().deleteOrg("org-123")).resolves.toBeUndefined();
     });
 
     it("silently succeeds on 404", async () => {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 404, json: async () => ({}) }));
-      await expect(makeClient().deleteOrg("nonexistent")).resolves.toBeUndefined();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({ status: 404, json: async () => ({}) }),
+      );
+      await expect(
+        makeClient().deleteOrg("nonexistent"),
+      ).resolves.toBeUndefined();
     });
   });
 
   describe("fromEnv()", () => {
     it("throws when ZITADEL_DOMAIN is missing", () => {
-      expect(() => HttpZitadelClient.fromEnv({ ZITADEL_TOKEN: "tok" })).toThrow("ZITADEL_DOMAIN");
+      expect(() => HttpZitadelClient.fromEnv({ ZITADEL_TOKEN: "tok" })).toThrow(
+        "ZITADEL_DOMAIN",
+      );
     });
 
     it("throws when ZITADEL_TOKEN is missing", () => {
-      expect(() => HttpZitadelClient.fromEnv({ ZITADEL_DOMAIN: "http://localhost" })).toThrow("ZITADEL_TOKEN");
+      expect(() =>
+        HttpZitadelClient.fromEnv({ ZITADEL_DOMAIN: "http://localhost" }),
+      ).toThrow("ZITADEL_TOKEN");
     });
 
     it("constructs from env vars", () => {
@@ -204,7 +253,7 @@ describe("StubZitadelClient", () => {
 
     const retrieved = await stub.getOrg(org.orgId);
     expect(retrieved).not.toBeNull();
-    expect(retrieved!.name).toBe("Stub Corp");
+    expect(retrieved?.name).toBe("Stub Corp");
   });
 
   it("returns null for unknown orgId", async () => {

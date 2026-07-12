@@ -203,11 +203,13 @@ describe("VaultSecretManager", () => {
 // VaultAppRoleAuth
 // ---------------------------------------------------------------------------
 
-const makeLoginResponse = (overrides: Partial<{
-  client_token: string;
-  lease_duration: number;
-  renewable: boolean;
-}> = {}) => ({
+const makeLoginResponse = (
+  overrides: Partial<{
+    client_token: string;
+    lease_duration: number;
+    renewable: boolean;
+  }> = {},
+) => ({
   auth: {
     client_token: "s.approle-token-abc",
     lease_duration: 3600,
@@ -216,11 +218,13 @@ const makeLoginResponse = (overrides: Partial<{
   },
 });
 
-const makeRenewResponse = (overrides: Partial<{
-  client_token: string;
-  lease_duration: number;
-  renewable: boolean;
-}> = {}) => ({
+const makeRenewResponse = (
+  overrides: Partial<{
+    client_token: string;
+    lease_duration: number;
+    renewable: boolean;
+  }> = {},
+) => ({
   auth: {
     client_token: "s.approle-token-abc",
     lease_duration: 3600,
@@ -229,7 +233,9 @@ const makeRenewResponse = (overrides: Partial<{
   },
 });
 
-const makeAppRoleAuth = (overrides: Partial<ConstructorParameters<typeof VaultAppRoleAuth>[0]> = {}) =>
+const makeAppRoleAuth = (
+  overrides: Partial<ConstructorParameters<typeof VaultAppRoleAuth>[0]> = {},
+) =>
   new VaultAppRoleAuth({
     baseUrl: "http://localhost:8200",
     roleId: "test-role-id",
@@ -327,7 +333,11 @@ describe("VaultAppRoleAuth", () => {
       .mockResolvedValueOnce({
         // Re-login succeeds with new token
         status: 200,
-        json: async () => makeLoginResponse({ client_token: "s.new-token", lease_duration: 3600 }),
+        json: async () =>
+          makeLoginResponse({
+            client_token: "s.new-token",
+            lease_duration: 3600,
+          }),
       });
     vi.stubGlobal("fetch", mockFetch);
 
@@ -406,8 +416,10 @@ describe("VaultSecretManager — token resolver", () => {
 
     // Resolver must have been called once per request.
     expect(callCount).toBe(2);
-    const headers0 = (mockFetch.mock.calls[0] as [string, RequestInit])[1].headers as Record<string, string>;
-    const headers1 = (mockFetch.mock.calls[1] as [string, RequestInit])[1].headers as Record<string, string>;
+    const headers0 = (mockFetch.mock.calls[0] as [string, RequestInit])[1]
+      .headers as Record<string, string>;
+    const headers1 = (mockFetch.mock.calls[1] as [string, RequestInit])[1]
+      .headers as Record<string, string>;
     expect(headers0["X-Vault-Token"]).toBe("token-1");
     expect(headers1["X-Vault-Token"]).toBe("token-2");
   });

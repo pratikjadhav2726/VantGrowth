@@ -26,6 +26,7 @@ import {
   type LlmCallRunner,
   OpenAiLlmCallRunner,
 } from "@growthos/llm-harness";
+import { N8nDispatchClient } from "@growthos/n8n";
 import {
   createHttpMiddleware,
   createLogger,
@@ -40,6 +41,7 @@ import { createCommandRoutes } from "./routes/commands.js";
 import { createDigestRoutes } from "./routes/digest.js";
 import { createMotionRoutes } from "./routes/motion.js";
 import { createMotionsRoutes } from "./routes/motions.js";
+import { createN8nRoutes } from "./routes/n8n.js";
 import { createPaperclipRoutes } from "./routes/paperclip.js";
 import { createSettingsRoutes } from "./routes/settings.js";
 import { createSignalRoutes } from "./routes/signals.js";
@@ -63,6 +65,9 @@ export interface AppDependencies {
    * tests to force unconfigured behaviour.
    */
   llmCallRunner?: LlmCallRunner | null;
+  n8nSharedSecret?: string | null;
+  n8nDispatchClient?: N8nDispatchClient | null;
+  n8nDispatchWebhookUrl?: string | null;
   /**
    * When set, all mutation routes enforce `Authorization: Bearer <token>`.
    * When null/undefined, the API runs in permissive mode (dev/CI default).
@@ -155,9 +160,7 @@ const resolveTenantSettingsRepository = (
   return new PostgresTenantSettingsRepository(createDbFromEnv());
 };
 
-const resolveLogSink = ():
-  | BufferedLlmCallLogSink
-  | undefined => {
+const resolveLogSink = (): BufferedLlmCallLogSink | undefined => {
   if (!process.env.CLICKHOUSE_URL && !process.env.CLICKHOUSE_HTTP_URL) {
     return undefined;
   }
@@ -168,7 +171,9 @@ const resolveLogSink = ():
       flushIntervalMs: 15_000,
     });
   } catch {
-    log.warn("ClickHouse log sink misconfigured — LLM calls will not be logged");
+    log.warn(
+      "ClickHouse log sink misconfigured — LLM calls will not be logged",
+    );
     return undefined;
   }
 };
@@ -184,6 +189,38 @@ const resolveLlmCallRunner = (deps: AppDependencies): LlmCallRunner | null => {
     );
   }
   return null;
+};
+
+const resolveN8nSharedSecret = (deps: AppDependencies): string | null =>
+  deps.n8nSharedSecret ?? process.env.N8N_SHARED_SECRET ?? null;
+
+const resolveN8nDispatchWebhookUrl = (deps: AppDependencies): string | null =>
+  deps.n8nDispatchWebhookUrl ?? process.env.N8N_DISPATCH_WEBHOOK_URL ?? null;
+
+const resolveN8nDispatchClient = (
+  deps: AppDependencies,
+): N8nDispatchClient | null => {
+  if (deps.n8nDispatchClient !== undefined) return deps.n8nDispatchClient;
+
+  const webhookUrl = resolveN8nDispatchWebhookUrl(deps);
+  if (!webhookUrl) return null;
+
+  const timeoutMs = process.env.N8N_TIMEOUT_MS
+    ? Number(process.env.N8N_TIMEOUT_MS)
+    : 10_000;
+
+  try {
+    return new N8nDispatchClient({
+      webhookUrl,
+      timeoutMs:
+        Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 10_000,
+    });
+  } catch {
+    log.warn(
+      "n8n dispatch client misconfigured; dispatch route will be unavailable",
+    );
+    return null;
+  }
 };
 
 export const createApp = (deps: AppDependencies = {}): Hono => {
@@ -223,6 +260,7 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
   app.use("/v1/signals", requireToken);
   app.use("/v1/signals/*", requireToken);
   app.use("/v1/commands/*", requireToken);
+  app.use("/v1/n8n/dispatch", requireToken);
   app.use("/v1/paperclip/*", requireToken);
   app.use("/v1/workflows/hello", requireToken);
   app.use("/v1/workflows/tenant-provisioning", requireToken);
@@ -268,10 +306,7 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
     "/v1/commands",
     createCommandRoutes({ outboxRepository: resolveOutboxRepository(deps) }),
   );
-  app.route(
-    "/v1/paperclip",
-    createPaperclipRoutes({ paperclipClient }),
-  );
+  app.route("/v1/paperclip", createPaperclipRoutes({ paperclipClient }));
   app.route(
     "/v1/workflows",
     createWorkflowRoutes({
@@ -286,6 +321,16 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
     createSignalRoutes({
       signalEventsRepository: resolveSignalEventsRepository(deps),
       llmCallRunner: resolveLlmCallRunner(deps),
+    }),
+  );
+  app.route(
+    "/v1/n8n",
+    createN8nRoutes({
+      signalEventsRepository: resolveSignalEventsRepository(deps),
+      outboxRepository: resolveOutboxRepository(deps),
+      n8nSharedSecret: resolveN8nSharedSecret(deps),
+      n8nDispatchClient: resolveN8nDispatchClient(deps),
+      n8nDispatchWebhookUrl: resolveN8nDispatchWebhookUrl(deps),
     }),
   );
   app.route(

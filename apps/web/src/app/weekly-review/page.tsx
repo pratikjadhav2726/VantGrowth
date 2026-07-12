@@ -12,9 +12,9 @@
  * degrade gracefully with empty-state prompts.
  */
 
+import { DigestTrigger } from "@/components/digest-trigger";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
-import { DigestTrigger } from "@/components/digest-trigger";
 import { getMotionOverview, listApprovals } from "@/lib/api-client";
 import { cookies } from "next/headers";
 
@@ -101,7 +101,9 @@ export default async function WeeklyReviewPage() {
           </span>
           <DigestTrigger
             tenantId={DEV_TENANT_ID}
-            {...(digestRecipientEmail ? { recipientEmail: digestRecipientEmail } : {})}
+            {...(digestRecipientEmail
+              ? { recipientEmail: digestRecipientEmail }
+              : {})}
           />
         </div>
       </div>

@@ -250,7 +250,10 @@ export const generateLlmContentBrief = async (
         tenantId: opportunity.tenant_id,
         opportunityId: opportunity.opportunity_id,
       },
-      { tenantId: opportunity.tenant_id },
+      {
+        tenantId: opportunity.tenant_id,
+        responseFormat: { type: "json_object" },
+      },
     );
     content = result.content;
   } catch {

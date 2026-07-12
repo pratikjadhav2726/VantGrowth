@@ -14,6 +14,7 @@ export interface EventPublisher {
 export interface WarmthWorkerDependencies {
   outboxRepository: OutboxRepository;
   eventPublisher: EventPublisher;
+  now?: () => Date;
 }
 
 const TOUCH_WEIGHTS: Record<string, number> = {
@@ -74,10 +75,11 @@ export class WarmthWorker {
 
   async process(input: WarmthSignal): Promise<WarmthResult> {
     const signal = warmthSignalSchema.parse(input);
+    const evaluatedAt = this.deps.now?.() ?? new Date();
     const result = warmthResultSchema.parse({
       ...signal,
-      ...evaluateWarmthSignal(signal),
-      evaluatedAt: new Date(),
+      ...evaluateWarmthSignal(signal, evaluatedAt),
+      evaluatedAt,
     });
 
     const payload = {

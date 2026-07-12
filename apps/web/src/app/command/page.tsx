@@ -9,7 +9,6 @@
 import { StatusBadge } from "@/components/status-badge";
 import { AGENTS, STATUS_META } from "@/lib/agent-catalog";
 import { getMotionOverview, listApprovals } from "@/lib/api-client";
-import { TIER_META, motionDisplay, type MotionTier } from "@/lib/motion-catalog";
 import {
   AGENT_RUNTIME,
   CHANNELS,
@@ -21,6 +20,11 @@ import {
   SCENARIO_KPIS,
   SIGNAL_FEED,
 } from "@/lib/command-center-demo";
+import {
+  type MotionTier,
+  TIER_META,
+  motionDisplay,
+} from "@/lib/motion-catalog";
 import Link from "next/link";
 
 const DEV_TENANT_ID =
@@ -60,7 +64,10 @@ interface ScoredMotion {
   tier: MotionTier;
 }
 
-async function loadMotions(): Promise<{ motions: ScoredMotion[]; rationale: string[] }> {
+async function loadMotions(): Promise<{
+  motions: ScoredMotion[];
+  rationale: string[];
+}> {
   try {
     const overview = await getMotionOverview(DEV_TENANT_ID);
     const scores = overview.latestScore?.scores ?? {};
@@ -73,7 +80,11 @@ async function loadMotions(): Promise<{ motions: ScoredMotion[]; rationale: stri
       return "Observe";
     };
     const motions = Object.entries(scores)
-      .map(([label, score]) => ({ label, score: Number(score), tier: tierOf(label) }))
+      .map(([label, score]) => ({
+        label,
+        score: Number(score),
+        tier: tierOf(label),
+      }))
       .sort((a, b) => b.score - a.score);
     return { motions, rationale: overview.latestScore?.rationale ?? [] };
   } catch {
@@ -82,7 +93,10 @@ async function loadMotions(): Promise<{ motions: ScoredMotion[]; rationale: stri
 }
 
 export default async function CommandCenterPage() {
-  const [approvals, motionData] = await Promise.all([loadApprovals(), loadMotions()]);
+  const [approvals, motionData] = await Promise.all([
+    loadApprovals(),
+    loadMotions(),
+  ]);
   const roster = AGENTS.filter((a) => a.category !== "Infrastructure");
 
   return (
@@ -106,16 +120,29 @@ export default async function CommandCenterPage() {
               <span className="h-2 w-2 rounded-full bg-green-500" /> Live data
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-gray-300" /> Demo scenario
+              <span className="h-2 w-2 rounded-full bg-gray-300" /> Demo
+              scenario
             </span>
           </div>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-          <Kpi label="Signals today" value={SCENARIO_KPIS.signalsToday} scenario />
-          <Kpi label="Next-best-actions" value={SCENARIO_KPIS.nbasPending} scenario />
+          <Kpi
+            label="Signals today"
+            value={SCENARIO_KPIS.signalsToday}
+            scenario
+          />
+          <Kpi
+            label="Next-best-actions"
+            value={SCENARIO_KPIS.nbasPending}
+            scenario
+          />
           <Kpi label="Approvals" value={approvals.length} live />
-          <Kpi label="Warm accounts" value={SCENARIO_KPIS.warmAccounts} scenario />
+          <Kpi
+            label="Warm accounts"
+            value={SCENARIO_KPIS.warmAccounts}
+            scenario
+          />
           <Kpi label="Pipeline" value={SCENARIO_KPIS.pipelineValue} scenario />
         </div>
       </div>
@@ -135,10 +162,16 @@ export default async function CommandCenterPage() {
                       href={`/agents/${a.id}`}
                       className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-gray-50"
                     >
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`} />
-                      <span className="flex-1 truncate text-gray-700">{a.name}</span>
+                      <span
+                        className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`}
+                      />
+                      <span className="flex-1 truncate text-gray-700">
+                        {a.name}
+                      </span>
                       <span className="font-mono text-[10px] text-gray-400">
-                        {rt?.lastRun ? `✓${rt.lastRun}` : rt?.queue ?? meta.label}
+                        {rt?.lastRun
+                          ? `✓${rt.lastRun}`
+                          : (rt?.queue ?? meta.label)}
                       </span>
                     </Link>
                   </li>
@@ -280,7 +313,10 @@ export default async function CommandCenterPage() {
               how each is scored · what it drives
             </span>
           </h2>
-          <span className="h-2 w-2 rounded-full bg-green-500" title="Live data" />
+          <span
+            className="h-2 w-2 rounded-full bg-green-500"
+            title="Live data"
+          />
         </div>
         <p className="mb-4 text-xs text-gray-500">
           Fit is scored deterministically from your GTM signals (deal size,
@@ -343,7 +379,10 @@ export default async function CommandCenterPage() {
             </p>
             <ul className="mt-1.5 space-y-1">
               {motionData.rationale.map((r) => (
-                <li key={r} className="flex items-start gap-2 text-xs text-gray-600">
+                <li
+                  key={r}
+                  className="flex items-start gap-2 text-xs text-gray-600"
+                >
                   <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-gray-300" />
                   {r}
                 </li>
@@ -392,10 +431,10 @@ export default async function CommandCenterPage() {
       </div>
 
       <p className="px-1 text-xs text-gray-400">
-        Approval Queue and agent roster are live. Signal feed, next-best-actions,
-        channel health and pipeline counts are a demo scenario representing the
-        view once the Mixmax/Nooks/LinkedIn/Reddit/SAD adapters and dispatch
-        layer are wired.
+        Approval Queue and agent roster are live. Signal feed,
+        next-best-actions, channel health and pipeline counts are a demo
+        scenario representing the view once the Mixmax/Nooks/LinkedIn/Reddit/SAD
+        adapters and dispatch layer are wired.
       </p>
     </div>
   );
@@ -453,9 +492,17 @@ function Panel({
             </span>
           )}
         </h2>
-        {live && <span className="h-2 w-2 rounded-full bg-green-500" title="Live data" />}
+        {live && (
+          <span
+            className="h-2 w-2 rounded-full bg-green-500"
+            title="Live data"
+          />
+        )}
         {scenario && (
-          <span className="h-2 w-2 rounded-full bg-gray-300" title="Demo scenario" />
+          <span
+            className="h-2 w-2 rounded-full bg-gray-300"
+            title="Demo scenario"
+          />
         )}
       </div>
       {children}

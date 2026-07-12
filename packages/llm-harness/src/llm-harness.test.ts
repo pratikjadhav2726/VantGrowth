@@ -211,6 +211,58 @@ describe("OpenAiLlmCallRunner", () => {
     expect(result.promptVersion).toBe("1.0.0");
   });
 
+  it("passes JSON mode response_format when requested", async () => {
+    const client = makeOpenAiMock('{"answer":42}');
+    const runner = new OpenAiLlmCallRunner(client);
+
+    await runner.run(
+      template,
+      { question: "What is 6x7?" },
+      { responseFormat: { type: "json_object" } },
+    );
+
+    expect(client.chat.completions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        response_format: { type: "json_object" },
+      }),
+    );
+  });
+
+  it("passes strict JSON schema response_format when requested", async () => {
+    const client = makeOpenAiMock('{"answer":42}');
+    const runner = new OpenAiLlmCallRunner(client);
+
+    await runner.run(
+      template,
+      { question: "What is 6x7?" },
+      {
+        responseFormat: {
+          type: "json_schema",
+          name: "answer_payload",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: { answer: { type: "number" } },
+            required: ["answer"],
+          },
+        },
+      },
+    );
+
+    expect(client.chat.completions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        response_format: {
+          type: "json_schema",
+          json_schema: expect.objectContaining({
+            name: "answer_payload",
+            strict: true,
+          }),
+        },
+      }),
+    );
+  });
+
   it("computes costUsd from token pricing table", async () => {
     const client = makeOpenAiMock("ok");
     const runner = new OpenAiLlmCallRunner(client, { defaultModel: "gpt-4o" });

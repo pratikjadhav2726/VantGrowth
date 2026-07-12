@@ -217,7 +217,10 @@ export class VaultSecretManager implements SecretManager {
     const secretId = env.VAULT_SECRET_ID ?? env.GROWTHOS_VAULT_SECRET_ID;
     if (roleId && secretId) {
       const auth = new VaultAppRoleAuth({ baseUrl, roleId, secretId });
-      return new VaultSecretManager({ baseUrl, token: auth.getTokenResolver() });
+      return new VaultSecretManager({
+        baseUrl,
+        token: auth.getTokenResolver(),
+      });
     }
 
     const token = env.VAULT_TOKEN ?? env.GROWTHOS_VAULT_TOKEN;

@@ -90,6 +90,20 @@ Point GrowthOS at your Paperclip fork deployment by setting:
 
 See `.env.example` and `paperclip_guide.md`.
 
+## n8n integration status
+
+n8n is the active single connector fabric for external SaaS integrations. GrowthOS does not add direct HubSpot/Salesforce/Mixmax/Nooks/LinkedIn/etc. connectors; n8n normalizes those workflows and calls GrowthOS.
+
+- Inbound: `POST /v1/n8n/signals` accepts signed n8n events and stores them as `signal_events`.
+- Outbound: `POST /v1/n8n/dispatch` enqueues approved `n8n.dispatch.requested.v1` actions for async n8n execution.
+- SmarterMCP is retained only as a disabled legacy reference, not an active dependency.
+
+Configure:
+
+- `N8N_SHARED_SECRET`
+- `N8N_DISPATCH_WEBHOOK_URL`
+- optional: `N8N_BASE_URL`, `N8N_API_KEY`, `N8N_TIMEOUT_MS`
+
 ## Local infra and operations
 
 For full infra stack (Postgres, NATS, Valkey, MinIO, ClickHouse, Qdrant, Gitea, Meilisearch, OpenBao), use:

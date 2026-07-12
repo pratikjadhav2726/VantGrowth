@@ -1,3 +1,4 @@
+import { HttpLagoBillingClient, StubBillingClient } from "@growthos/billing";
 import {
   HttpGiteaProvisioningClient,
   HttpMinioProvisioningClient,
@@ -8,13 +9,12 @@ import {
   StubPaperclipProvisioningClient,
   restateConfigFromEnv,
 } from "@growthos/core";
-import { HttpZitadelClient, StubZitadelClient } from "@growthos/identity";
-import { HttpLagoBillingClient, StubBillingClient } from "@growthos/billing";
 import {
   PostgresOutboxRepository,
   PostgresWorkflowRunRepository,
   createDbFromEnv,
 } from "@growthos/db";
+import { HttpZitadelClient, StubZitadelClient } from "@growthos/identity";
 import { createLogger, initOtelSdk } from "@growthos/observability";
 import {
   EnvSecretManager,

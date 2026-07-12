@@ -332,7 +332,9 @@ export const sendFounderDigest = (
   apiFetch("/v1/digest/send", tenantId, {
     method: "POST",
     body: JSON.stringify({
-      ...(options?.recipientEmail ? { recipientEmail: options.recipientEmail } : {}),
+      ...(options?.recipientEmail
+        ? { recipientEmail: options.recipientEmail }
+        : {}),
     }),
     schema: sendDigestResponseSchema,
   });

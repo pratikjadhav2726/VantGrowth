@@ -579,6 +579,15 @@ describe("API app", () => {
     expect(response.status).toBe(202);
     expect(mockClient.createCompany).toHaveBeenCalledTimes(1);
     expect(mockClient.createAgentHire).toHaveBeenCalledTimes(1);
+    expect(mockClient.createAgentHire).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "cmo",
+        metadata: expect.objectContaining({
+          growthos_requested_role: "content_strategist",
+          growthos_role_normalized: true,
+        }),
+      }),
+    );
     expect(mockClient.createIssue).toHaveBeenCalledTimes(1);
     const responsePayload = (await response.json()) as {
       idempotencyKey: string;
@@ -702,9 +711,13 @@ describe("API app", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            id: "agt_1",
-            identifier: "LAT-INB",
-            name: "Inbound Strategist",
+            agent: {
+              id: "agt_1",
+              identifier: "LAT-INB",
+              name: "Inbound Strategist",
+              status: "pending_approval",
+            },
+            approval: { id: "apr_1", status: "pending", type: "hire_agent" },
           }),
           {
             status: 200,
@@ -1520,7 +1533,10 @@ describe("/v1/settings", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { tenantId: string; settings: Record<string, unknown> };
+    const body = (await res.json()) as {
+      tenantId: string;
+      settings: Record<string, unknown>;
+    };
     expect(body.tenantId).toBe(tenantId);
     expect(body.settings).toEqual({});
   });
@@ -1548,7 +1564,10 @@ describe("/v1/settings", () => {
     await app.request("http://localhost/v1/settings", {
       method: "PATCH",
       headers: { "content-type": "application/json", "X-Tenant-Id": tenantId },
-      body: JSON.stringify({ companyName: "Acme", logoUrl: "https://cdn.acme.io/logo.svg" }),
+      body: JSON.stringify({
+        companyName: "Acme",
+        logoUrl: "https://cdn.acme.io/logo.svg",
+      }),
     });
     const res = await app.request("http://localhost/v1/settings", {
       method: "PATCH",
@@ -1580,7 +1599,9 @@ describe("/v1/settings", () => {
   });
 
   it("GET /v1/settings returns 400 when X-Tenant-Id is missing", async () => {
-    const app = createApp({ tenantSettingsRepository: new InMemoryTenantSettingsRepository() });
+    const app = createApp({
+      tenantSettingsRepository: new InMemoryTenantSettingsRepository(),
+    });
     const res = await app.request("http://localhost/v1/settings");
     expect(res.status).toBe(400);
   });
@@ -1621,6 +1642,241 @@ describe("/v1/settings", () => {
     });
 
     expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// /v1/n8n
+// ---------------------------------------------------------------------------
+
+describe("/v1/n8n", () => {
+  const n8nSignal = {
+    eventId: "evt_reply_1",
+    source: "mixmax",
+    signalType: "icp",
+    occurredAt: "2026-07-06T07:00:00.000Z",
+    workflowId: "wf_gtm_signal",
+    executionId: "exec_1",
+    payload: { accountId: "acct_1", replyText: "Can we talk tomorrow?" },
+  };
+
+  const sign = (body: string, secret: string): string =>
+    createHmac("sha256", secret).update(body).digest("hex");
+
+  it("accepts signed n8n signals without bearer auth", async () => {
+    const signalEventsRepository = new InMemorySignalEventsRepository();
+    const secret = "n8n-test-secret";
+    const body = JSON.stringify(n8nSignal);
+    const app = createApp({
+      apiServiceToken: "growthos-token",
+      signalEventsRepository,
+      n8nSharedSecret: secret,
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+        "Idempotency-Key": "evt_reply_1",
+        "X-GrowthOS-Signature": sign(body, secret),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(202);
+    const payload = (await res.json()) as {
+      accepted: boolean;
+      inserted: boolean;
+      signalId: string;
+    };
+    expect(payload).toMatchObject({ accepted: true, inserted: true });
+
+    const signals = await signalEventsRepository.listUnprocessed(
+      tenantId,
+      "icp",
+      10,
+    );
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.source).toBe("n8n:mixmax");
+    expect(signals[0]?.externalId).toBe("evt_reply_1");
+    expect(signals[0]?.payload).toMatchObject({
+      accountId: "acct_1",
+      n8n: {
+        eventId: "evt_reply_1",
+        workflowId: "wf_gtm_signal",
+        executionId: "exec_1",
+      },
+    });
+  });
+
+  it("rejects n8n signals with bad signature", async () => {
+    const body = JSON.stringify(n8nSignal);
+    const app = createApp({
+      signalEventsRepository: new InMemorySignalEventsRepository(),
+      n8nSharedSecret: "n8n-test-secret",
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+        "Idempotency-Key": "evt_reply_1",
+        "X-GrowthOS-Signature": "0".repeat(64),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects n8n signals with missing tenant", async () => {
+    const body = JSON.stringify(n8nSignal);
+    const secret = "n8n-test-secret";
+    const app = createApp({
+      signalEventsRepository: new InMemorySignalEventsRepository(),
+      n8nSharedSecret: secret,
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "Idempotency-Key": "evt_reply_1",
+        "X-GrowthOS-Signature": sign(body, secret),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("deduplicates duplicate n8n event ids", async () => {
+    const signalEventsRepository = new InMemorySignalEventsRepository();
+    const secret = "n8n-test-secret";
+    const body = JSON.stringify(n8nSignal);
+    const app = createApp({
+      signalEventsRepository,
+      n8nSharedSecret: secret,
+    });
+
+    const request = {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+        "Idempotency-Key": "evt_reply_1",
+        "X-GrowthOS-Signature": sign(body, secret),
+      },
+      body,
+    };
+
+    const first = await app.request("http://localhost/v1/n8n/signals", request);
+    const second = await app.request(
+      "http://localhost/v1/n8n/signals",
+      request,
+    );
+
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    expect(await second.json()).toMatchObject({ inserted: false });
+    expect(
+      await signalEventsRepository.listUnprocessed(tenantId, "icp", 10),
+    ).toHaveLength(1);
+  });
+
+  it("enqueues approved n8n dispatch requests", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const app = createApp({
+      apiServiceToken: "growthos-token",
+      outboxRepository,
+      n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer growthos-token",
+      },
+      body: JSON.stringify({
+        tenantId,
+        actionId: "act_1",
+        actionType: "send_email",
+        approvedBy: "founder",
+        idempotencyKey: "act_1",
+        payload: { to: "buyer@example.com" },
+      }),
+    });
+
+    expect(res.status).toBe(202);
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.eventType).toBe("n8n.dispatch.requested.v1");
+    expect(events[0]?.payload).toMatchObject({
+      actionId: "act_1",
+      actionType: "send_email",
+    });
+  });
+
+  it("protects n8n dispatch with the service token", async () => {
+    const app = createApp({
+      apiServiceToken: "growthos-token",
+      outboxRepository: new InMemoryOutboxRepository(),
+      n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tenantId,
+        actionId: "act_1",
+        actionType: "send_email",
+        approvedBy: "founder",
+        idempotencyKey: "act_1",
+        payload: {},
+      }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 503 when n8n dispatch is not configured", async () => {
+    const app = createApp({
+      outboxRepository: new InMemoryOutboxRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tenantId,
+        actionId: "act_1",
+        actionType: "send_email",
+        approvedBy: "founder",
+        idempotencyKey: "act_1",
+        payload: {},
+      }),
+    });
+
+    expect(res.status).toBe(503);
+  });
+
+  it("returns 503 when signal repository is unavailable", async () => {
+    const app = createApp();
+    const res = await app.request("http://localhost/v1/n8n/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+        "Idempotency-Key": "evt_reply_1",
+      },
+      body: JSON.stringify(n8nSignal),
+    });
+
+    expect(res.status).toBe(503);
   });
 });
 
@@ -1776,7 +2032,10 @@ describe("/v1/digest", () => {
     try {
       const res = await app.request("http://localhost/v1/digest/send", {
         method: "POST",
-        headers: { "X-Tenant-Id": tenantId, "content-type": "application/json" },
+        headers: {
+          "X-Tenant-Id": tenantId,
+          "content-type": "application/json",
+        },
         body: JSON.stringify({}),
       });
 
@@ -1811,7 +2070,10 @@ describe("/v1/digest", () => {
     try {
       const res = await app.request("http://localhost/v1/digest/send", {
         method: "POST",
-        headers: { "X-Tenant-Id": tenantId, "content-type": "application/json" },
+        headers: {
+          "X-Tenant-Id": tenantId,
+          "content-type": "application/json",
+        },
         body: JSON.stringify({}),
       });
 

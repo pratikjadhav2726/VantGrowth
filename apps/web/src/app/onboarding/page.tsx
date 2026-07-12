@@ -93,7 +93,9 @@ function StepIndicator({ current }: { current: number }) {
 // ---------------------------------------------------------------------------
 
 function CompanyStep({ defaults }: { defaults: Record<string, string> }) {
-  return <CompanyStepForm defaults={defaults} submitAction={submitCompanyStep} />;
+  return (
+    <CompanyStepForm defaults={defaults} submitAction={submitCompanyStep} />
+  );
 }
 
 // ---------------------------------------------------------------------------

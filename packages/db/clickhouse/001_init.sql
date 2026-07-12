@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS growthos.activity_log
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(occurred_at)
 ORDER BY (tenant_id, occurred_at, event_id)
-TTL occurred_at + INTERVAL 18 MONTH;
+TTL toDateTime(occurred_at) + INTERVAL 18 MONTH;
 
 -- cost_events: LLM + API cost tracking per tenant.
 CREATE TABLE IF NOT EXISTS growthos.cost_events
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS growthos.cost_events
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(recorded_at)
 ORDER BY (tenant_id, recorded_at, event_id)
-TTL recorded_at + INTERVAL 18 MONTH;
+TTL toDateTime(recorded_at) + INTERVAL 18 MONTH;
 
 -- llm_call_logs: per-call LLM observability — tokens, latency, cost, cache status.
 -- Written by LlmCallLogSink (batched HTTP inserts); never mutated after insert.
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS growthos.llm_call_logs
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(called_at)
 ORDER BY (tenant_id, called_at, call_id)
-TTL called_at + INTERVAL 24 MONTH;
+TTL toDateTime(called_at) + INTERVAL 24 MONTH;
 
 -- signal_attribution: raw attribution touchpoints per tenant.
 CREATE TABLE IF NOT EXISTS growthos.signal_attribution
@@ -80,4 +80,4 @@ CREATE TABLE IF NOT EXISTS growthos.signal_attribution
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(attributed_at)
 ORDER BY (tenant_id, attributed_at, touchpoint_id)
-TTL attributed_at + INTERVAL 18 MONTH;
+TTL toDateTime(attributed_at) + INTERVAL 18 MONTH;
