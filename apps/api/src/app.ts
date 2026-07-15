@@ -352,6 +352,7 @@ export const createApp = (deps: AppDependencies = {}): Hono => {
       approvalFeedbackRepository: resolveApprovalFeedbackRepository(deps),
       outboxRepository: resolveOutboxRepository(deps),
       motionStackRepository: resolveMotionStackRepository(deps),
+      signalEventsRepository: resolveSignalEventsRepository(deps),
     }),
   );
   app.route(

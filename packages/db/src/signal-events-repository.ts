@@ -14,7 +14,7 @@
  * Director calls `markProcessed()` after including a signal in a brief.
  */
 
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { tenantIdSchema } from "./contracts.js";
 import type { GrowthOsDb } from "./db.js";
@@ -72,6 +72,9 @@ export interface SignalEventsRepository {
     signalType: SignalTypeValue,
     limit: number,
   ): Promise<SignalEventRecord[]>;
+
+  /** Counts signals created at or after `since` for tenant-level reporting. */
+  countSince(tenantId: string, since: Date): Promise<number>;
 
   /**
    * Marks the given signal IDs as processed (sets processed_at = NOW()).
@@ -146,6 +149,13 @@ export class InMemorySignalEventsRepository implements SignalEventsRepository {
       )
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
       .slice(0, limit);
+  }
+
+  async countSince(tenantId: string, since: Date): Promise<number> {
+    return this.records.filter(
+      (r) =>
+        r.tenantId === tenantId && r.createdAt.getTime() >= since.getTime(),
+    ).length;
   }
 
   async markProcessed(tenantId: string, ids: bigint[]): Promise<void> {
@@ -290,5 +300,26 @@ export class PostgresSignalEventsRepository implements SignalEventsRepository {
           ),
         );
     });
+  }
+
+  async countSince(tenantId: string, since: Date): Promise<number> {
+    tenantIdSchema.parse(tenantId);
+    let result = 0;
+
+    await this.db.transaction(async (tx) => {
+      await setTenantContext(tx, tenantId);
+      const [row] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(signalEvents)
+        .where(
+          and(
+            eq(signalEvents.tenantId, tenantId),
+            gte(signalEvents.createdAt, since),
+          ),
+        );
+      result = row?.count ?? 0;
+    });
+
+    return result;
   }
 }

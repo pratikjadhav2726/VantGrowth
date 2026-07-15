@@ -1,8 +1,8 @@
 import type { OutboxRepository, SignalEventsRepository } from "@growthos/db";
 import {
   type N8nDispatchClient,
-  n8nDispatchRequestSchema,
-  n8nSignalEnvelopeSchema,
+  n8nCanonicalSignalEnvelopeSchema,
+  n8nTypedDispatchRequestSchema,
   verifyN8nSignature,
 } from "@growthos/n8n";
 import {
@@ -83,7 +83,8 @@ export const createN8nRoutes = (deps: N8nRouteDependencies): Hono => {
           return c.json({ error: "Request body must be valid JSON" }, 400);
         }
 
-        const envelopeResult = n8nSignalEnvelopeSchema.safeParse(parsedBody);
+        const envelopeResult =
+          n8nCanonicalSignalEnvelopeSchema.safeParse(parsedBody);
         if (!envelopeResult.success) {
           return c.json(
             {
@@ -177,7 +178,7 @@ export const createN8nRoutes = (deps: N8nRouteDependencies): Hono => {
           return c.json({ error: "Request body must be valid JSON" }, 400);
         }
 
-        const requestResult = n8nDispatchRequestSchema.safeParse(body);
+        const requestResult = n8nTypedDispatchRequestSchema.safeParse(body);
         if (!requestResult.success) {
           return c.json(
             {

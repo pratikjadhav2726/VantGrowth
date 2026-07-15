@@ -55,6 +55,25 @@ export interface ApprovalRouteDependencies {
   approvalFeedbackRepository: ApprovalFeedbackRepository | null;
 }
 
+const issueIdKeys = [
+  "issueId",
+  "issue_id",
+  "draft_id",
+  "draftId",
+  "brief_id",
+  "briefId",
+  "content_id",
+  "contentId",
+] as const;
+
+const extractIssueId = (payload: Record<string, unknown>): string | null => {
+  for (const key of issueIdKeys) {
+    const value = payload[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return null;
+};
+
 // ---------------------------------------------------------------------------
 // Route factory
 // ---------------------------------------------------------------------------
@@ -94,9 +113,25 @@ export const createApprovalRoutes = (deps: ApprovalRouteDependencies): Hono => {
       100,
     );
 
-    // Retrieve unconsumed outbox events matching the outputType.
-    const events = await deps.outboxRepository.listUnconsumed(tenantId, limit);
-    const matching = events.filter((e) => e.eventType === outputType);
+    const events = await deps.outboxRepository.listByEventType(
+      tenantId,
+      outputType,
+      limit * 2,
+    );
+    const decisions = deps.approvalFeedbackRepository
+      ? await deps.approvalFeedbackRepository.listRecent(
+          tenantId,
+          1000,
+          outputType,
+        )
+      : [];
+    const decidedIssueIds = new Set(decisions.map((d) => d.issueId));
+    const matching = events
+      .filter((e) => {
+        const issueId = extractIssueId(e.payload);
+        return issueId === null || !decidedIssueIds.has(issueId);
+      })
+      .slice(0, limit);
 
     const items = matching.map((e) => ({
       eventId: e.id,

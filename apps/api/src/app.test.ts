@@ -999,7 +999,10 @@ describe("GET /v1/approvals", () => {
       tenantId,
       eventType: "blog_draft.v1",
       idempotencyKey: "draft-1",
-      payload: { draft_id: "d-001", title: "PLG Explained" },
+      payload: {
+        draft_id: "00000000-0000-4000-8000-000000000201",
+        title: "PLG Explained",
+      },
     });
     await outboxRepository.enqueue({
       tenantId,
@@ -1021,6 +1024,62 @@ describe("GET /v1/approvals", () => {
     };
     expect(body.total).toBe(1);
     expect(body.items[0]?.outputType).toBe("blog_draft.v1");
+  });
+
+  it("keeps published approval artifacts pending until a founder decision exists", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const event = await outboxRepository.enqueue({
+      tenantId,
+      eventType: "blog_draft.v1",
+      idempotencyKey: "draft-published-1",
+      payload: {
+        draft_id: "00000000-0000-4000-8000-000000000202",
+        title: "Founder-led GTM teardown",
+      },
+    });
+    await outboxRepository.markConsumed(tenantId, event.id);
+
+    const app = createApp({ outboxRepository });
+    const res = await app.request(
+      "http://localhost/v1/approvals?outputType=blog_draft.v1",
+      { headers: { "X-Tenant-Id": tenantId } },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { total: number };
+    expect(body.total).toBe(1);
+  });
+
+  it("hides approval artifacts after the founder decides on them", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
+    const issueId = "00000000-0000-4000-8000-000000000203";
+    await outboxRepository.enqueue({
+      tenantId,
+      eventType: "blog_draft.v1",
+      idempotencyKey: "draft-decided-1",
+      payload: {
+        draft_id: issueId,
+        title: "Founder-led GTM teardown",
+      },
+    });
+    await approvalFeedbackRepository.record({
+      tenantId,
+      issueId,
+      outputType: "blog_draft.v1",
+      action: "approved",
+      learnOptIn: true,
+    });
+
+    const app = createApp({ outboxRepository, approvalFeedbackRepository });
+    const res = await app.request(
+      "http://localhost/v1/approvals?outputType=blog_draft.v1",
+      { headers: { "X-Tenant-Id": tenantId } },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { total: number };
+    expect(body.total).toBe(0);
   });
 
   it("returns 400 when X-Tenant-Id is missing", async () => {
@@ -1657,7 +1716,14 @@ describe("/v1/n8n", () => {
     occurredAt: "2026-07-06T07:00:00.000Z",
     workflowId: "wf_gtm_signal",
     executionId: "exec_1",
-    payload: { accountId: "acct_1", replyText: "Can we talk tomorrow?" },
+    payload: {
+      channel: "email",
+      sourceRecordId: "mixmax-reply-1",
+      actor: { company: "Acme", name: "Buyer" },
+      subject: "Reply from Acme",
+      text: "Can we talk tomorrow?",
+      metadata: { accountId: "acct_1" },
+    },
   };
 
   const sign = (body: string, secret: string): string =>
@@ -1701,7 +1767,9 @@ describe("/v1/n8n", () => {
     expect(signals[0]?.source).toBe("n8n:mixmax");
     expect(signals[0]?.externalId).toBe("evt_reply_1");
     expect(signals[0]?.payload).toMatchObject({
-      accountId: "acct_1",
+      channel: "email",
+      sourceRecordId: "mixmax-reply-1",
+      metadata: { accountId: "acct_1" },
       n8n: {
         eventId: "evt_reply_1",
         workflowId: "wf_gtm_signal",
@@ -1803,10 +1871,15 @@ describe("/v1/n8n", () => {
       body: JSON.stringify({
         tenantId,
         actionId: "act_1",
-        actionType: "send_email",
+        actionType: "email.send",
         approvedBy: "founder",
         idempotencyKey: "act_1",
-        payload: { to: "buyer@example.com" },
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
       }),
     });
 
@@ -1816,7 +1889,7 @@ describe("/v1/n8n", () => {
     expect(events[0]?.eventType).toBe("n8n.dispatch.requested.v1");
     expect(events[0]?.payload).toMatchObject({
       actionId: "act_1",
-      actionType: "send_email",
+      actionType: "email.send",
     });
   });
 
@@ -1833,10 +1906,15 @@ describe("/v1/n8n", () => {
       body: JSON.stringify({
         tenantId,
         actionId: "act_1",
-        actionType: "send_email",
+        actionType: "email.send",
         approvedBy: "founder",
         idempotencyKey: "act_1",
-        payload: {},
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
       }),
     });
 
@@ -1854,10 +1932,15 @@ describe("/v1/n8n", () => {
       body: JSON.stringify({
         tenantId,
         actionId: "act_1",
-        actionType: "send_email",
+        actionType: "email.send",
         approvedBy: "founder",
         idempotencyKey: "act_1",
-        payload: {},
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
       }),
     });
 
@@ -1889,6 +1972,7 @@ describe("/v1/digest", () => {
     const motionStackRepository = new InMemoryMotionStackRepository();
     const outboxRepository = new InMemoryOutboxRepository();
     const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
+    const signalEventsRepository = new InMemorySignalEventsRepository();
 
     // Seed motion score + stack
     await motionStackRepository.recordScore({
@@ -1913,12 +1997,16 @@ describe("/v1/digest", () => {
     });
 
     // Seed pending outbox approval item
-    await outboxRepository.enqueue({
+    const pendingDigestEvent = await outboxRepository.enqueue({
       tenantId,
       eventType: "blog_draft.v1",
       idempotencyKey: "digest-pending-1",
-      payload: { draft_id: "d-1", title: "Draft 1" },
+      payload: {
+        draft_id: "00000000-0000-4000-8000-000000000903",
+        title: "Draft 1",
+      },
     });
+    await outboxRepository.markConsumed(tenantId, pendingDigestEvent.id);
 
     // Seed one approved and one rejected decision
     await approvalFeedbackRepository.record({
@@ -1936,10 +2024,21 @@ describe("/v1/digest", () => {
       learnOptIn: true,
     });
 
+    await signalEventsRepository.ingest({
+      tenantId,
+      signalType: "community",
+      source: "reddit",
+      externalId: "digest-signal-1",
+      payload: {
+        text: "Founder asks about GTM signal automation.",
+      },
+    });
+
     const app = createApp({
       motionStackRepository,
       outboxRepository,
       approvalFeedbackRepository,
+      signalEventsRepository,
     });
 
     const res = await app.request("http://localhost/v1/digest/weekly", {
@@ -1957,7 +2056,7 @@ describe("/v1/digest", () => {
     expect(body.approvals.pending).toBe(1);
     expect(body.motionStack.primaryMotions).toEqual(["inbound_content"]);
     expect(body.motionStack.topMotion).toBe("inbound_content");
-    expect(body.signalCount).toBe(0);
+    expect(body.signalCount).toBe(1);
   });
 
   it("POST /v1/digest/send returns sent=false when Postal is not configured", async () => {

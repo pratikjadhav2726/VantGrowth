@@ -111,10 +111,15 @@ describe("OutboxPublisher", () => {
       payload: {
         tenantId: tenantA,
         actionId: "act-1",
-        actionType: "send_email",
+        actionType: "email.send",
         approvedBy: "founder",
         idempotencyKey: "act-1",
-        payload: { to: "buyer@example.com" },
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
       },
     });
 
@@ -132,19 +137,19 @@ describe("OutboxPublisher", () => {
     expect(remaining).toHaveLength(0);
   });
 
-  it("keeps retryable n8n dispatch failures unconsumed", async () => {
+  it("keeps retryable n8n dispatch failures unconsumed without tight-loop retries", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
+    const dispatch = vi.fn(async () => ({
+      ok: false as const,
+      status: 503,
+      error: "n8n unavailable",
+      retryable: true,
+    }));
     const publisher = new OutboxPublisher({
       outboxRepository,
       eventPublisher: { publish: vi.fn(async () => undefined) },
-      n8nDispatchClient: {
-        dispatch: vi.fn(async () => ({
-          ok: false as const,
-          status: 503,
-          error: "n8n unavailable",
-          retryable: true,
-        })),
-      },
+      n8nDispatchClient: { dispatch },
+      n8nRetryBackoffMs: 60_000,
     });
 
     await outboxRepository.enqueue({
@@ -154,18 +159,25 @@ describe("OutboxPublisher", () => {
       payload: {
         tenantId: tenantA,
         actionId: "act-2",
-        actionType: "send_email",
+        actionType: "email.send",
         approvedBy: "founder",
         idempotencyKey: "act-2",
-        payload: {},
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
       },
     });
 
-    await expect(
-      publisher.publishPendingForTenant(tenantA, 50),
-    ).rejects.toThrow("Retryable n8n dispatch failure");
+    const firstCount = await publisher.publishPendingForTenant(tenantA, 50);
+    const secondCount = await publisher.publishPendingForTenant(tenantA, 50);
 
     const remaining = await outboxRepository.listUnconsumed(tenantA, 50);
+    expect(firstCount).toBe(0);
+    expect(secondCount).toBe(0);
+    expect(dispatch).toHaveBeenCalledTimes(1);
     expect(remaining).toHaveLength(1);
   });
 });

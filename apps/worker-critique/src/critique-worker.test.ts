@@ -882,7 +882,11 @@ describe("evaluateRubricAsync", () => {
       ],
     };
 
-    const result = await evaluateRubricAsync(rubric, "Some content.", undefined);
+    const result = await evaluateRubricAsync(
+      rubric,
+      "Some content.",
+      undefined,
+    );
 
     expect(result.score).toBe(1);
     expect(result.criteriaResults[0]?.details).toContain("auto-passed");

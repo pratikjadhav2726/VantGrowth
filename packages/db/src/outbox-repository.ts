@@ -13,6 +13,11 @@ export interface OutboxRepository {
     consumedAt?: Date,
   ): Promise<StoredOutboxEvent>;
   listUnconsumed(tenantId: string, limit: number): Promise<StoredOutboxEvent[]>;
+  listByEventType(
+    tenantId: string,
+    eventType: string,
+    limit: number,
+  ): Promise<StoredOutboxEvent[]>;
 }
 
 const outboxIdempotencyKey = (command: EnqueueOutboxEvent): string =>
@@ -77,6 +82,19 @@ export class InMemoryOutboxRepository implements OutboxRepository {
         (event) => event.tenantId === tenantId && event.consumedAt === null,
       )
       .sort((a, b) => Number(a.id) - Number(b.id))
+      .slice(0, limit);
+  }
+
+  async listByEventType(
+    tenantId: string,
+    eventType: string,
+    limit: number,
+  ): Promise<StoredOutboxEvent[]> {
+    return Array.from(this.eventsById.values())
+      .filter(
+        (event) => event.tenantId === tenantId && event.eventType === eventType,
+      )
+      .sort((a, b) => Number(b.id) - Number(a.id))
       .slice(0, limit);
   }
 }

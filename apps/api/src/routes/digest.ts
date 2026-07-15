@@ -19,6 +19,7 @@ import type {
   ApprovalFeedbackRepository,
   MotionStackRepository,
   OutboxRepository,
+  SignalEventsRepository,
 } from "@growthos/db";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -27,6 +28,7 @@ export interface DigestDeps {
   approvalFeedbackRepository: ApprovalFeedbackRepository | null;
   outboxRepository: OutboxRepository | null;
   motionStackRepository: MotionStackRepository | null;
+  signalEventsRepository: SignalEventsRepository | null;
 }
 
 const weeklyMetricsSchema = z.object({
@@ -88,6 +90,33 @@ const MOTION_LABEL: Record<string, string> = {
   event_marketing: "Event Marketing",
 };
 
+const approvalEventTypes = new Set([
+  "blog_draft.v1",
+  "content_brief.v1",
+  "intel_brief.v1",
+]);
+
+const approvalIssueIdKeys = [
+  "issueId",
+  "issue_id",
+  "draft_id",
+  "draftId",
+  "brief_id",
+  "briefId",
+  "content_id",
+  "contentId",
+] as const;
+
+const extractApprovalIssueId = (
+  payload: Record<string, unknown>,
+): string | null => {
+  for (const key of approvalIssueIdKeys) {
+    const value = payload[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return null;
+};
+
 function formatDigestEmail(metrics: WeeklyMetrics, tenantId: string): string {
   const top = metrics.motionStack.topMotion
     ? (MOTION_LABEL[metrics.motionStack.topMotion] ??
@@ -144,20 +173,30 @@ async function buildWeeklyMetrics(
   // Pending items from outbox queue for founder-reviewed artifact events.
   if (deps.outboxRepository) {
     try {
-      const pendingEvents = await deps.outboxRepository.listUnconsumed(
-        tenantId,
-        1000,
+      const decisions = deps.approvalFeedbackRepository
+        ? await deps.approvalFeedbackRepository.listRecent(tenantId, 1000)
+        : [];
+      const decidedIssueIdsByType = new Set(
+        decisions.map((d) => `${d.outputType}:${d.issueId}`),
       );
-      const approvalEventTypes = new Set([
-        "blog_draft.v1",
-        "content_brief.v1",
-        "intel_brief.v1",
-      ]);
-      pending = pendingEvents.filter(
-        (e) =>
-          approvalEventTypes.has(e.eventType) &&
-          e.createdAt.getTime() >= periodStartDate.getTime(),
-      ).length;
+      const approvalEvents = (
+        await Promise.all(
+          [...approvalEventTypes].map((eventType) =>
+            deps.outboxRepository?.listByEventType(tenantId, eventType, 1000),
+          ),
+        )
+      ).flatMap((events) => events ?? []);
+
+      pending = approvalEvents.filter((event) => {
+        if (event.createdAt.getTime() < periodStartDate.getTime()) {
+          return false;
+        }
+        const issueId = extractApprovalIssueId(event.payload);
+        return (
+          issueId === null ||
+          !decidedIssueIdsByType.has(`${event.eventType}:${issueId}`)
+        );
+      }).length;
     } catch {
       // swallow — digest still useful without outbox
     }
@@ -188,7 +227,9 @@ async function buildWeeklyMetrics(
     periodEnd,
     approvals: { approved, rejected, pending },
     motionStack: { primaryMotions, topMotion },
-    signalCount: 0,
+    signalCount: deps.signalEventsRepository
+      ? await deps.signalEventsRepository.countSince(tenantId, periodStartDate)
+      : 0,
     generatedAt: now.toISOString(),
   };
 }

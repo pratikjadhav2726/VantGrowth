@@ -3,7 +3,7 @@ import { tenantScopedSubject } from "@growthos/db";
 import {
   type N8nDispatchRequest,
   type N8nDispatchResult,
-  n8nDispatchRequestSchema,
+  n8nTypedDispatchRequestSchema,
 } from "@growthos/n8n";
 import {
   SpanKind,
@@ -36,6 +36,7 @@ export interface OutboxPublisherDependencies {
   outboxRepository: OutboxRepository;
   eventPublisher: EventPublisher;
   n8nDispatchClient?: N8nDispatchPort | null;
+  n8nRetryBackoffMs?: number;
 }
 
 const N8N_DISPATCH_EVENT_TYPE = "n8n.dispatch.requested.v1";
@@ -69,7 +70,13 @@ export const runtimeConfigFromEnv = (
 };
 
 export class OutboxPublisher {
+  private readonly n8nRetryAfterByEventId = new Map<string, number>();
+
   constructor(private readonly deps: OutboxPublisherDependencies) {}
+
+  private get retryBackoffMs(): number {
+    return this.deps.n8nRetryBackoffMs ?? 60_000;
+  }
 
   async publishPendingForTenant(
     tenantId: string,
@@ -91,7 +98,20 @@ export class OutboxPublisher {
 
           for (const event of pending) {
             if (event.eventType === N8N_DISPATCH_EVENT_TYPE) {
-              await this.dispatchN8nAction(event.payload);
+              const retryAfter = this.n8nRetryAfterByEventId.get(event.id);
+              if (retryAfter && retryAfter > Date.now()) {
+                continue;
+              }
+
+              const dispatched = await this.dispatchN8nAction(event.payload);
+              if (!dispatched) {
+                this.n8nRetryAfterByEventId.set(
+                  event.id,
+                  Date.now() + this.retryBackoffMs,
+                );
+                continue;
+              }
+              this.n8nRetryAfterByEventId.delete(event.id);
             } else {
               await this.deps.eventPublisher.publish(
                 tenantScopedSubject(event.tenantId, event.eventType),
@@ -123,20 +143,18 @@ export class OutboxPublisher {
 
   private async dispatchN8nAction(
     payload: Record<string, unknown>,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!this.deps.n8nDispatchClient) {
       throw new Error("n8n dispatch client is not configured");
     }
 
-    const request = n8nDispatchRequestSchema.parse(payload);
+    const request = n8nTypedDispatchRequestSchema.parse(payload);
     const result = await this.deps.n8nDispatchClient.dispatch(request);
-    if (result.ok) return;
+    if (result.ok) return true;
 
-    if (!result.retryable) return;
+    if (!result.retryable) return true;
 
-    throw new Error(
-      `Retryable n8n dispatch failure: ${result.status ?? "network"} ${result.error}`,
-    );
+    return false;
   }
 
   async publishCycle(

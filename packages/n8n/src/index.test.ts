@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   N8nDispatchClient,
+  buildCanonicalN8nSignalEnvelope,
   n8nDispatchRequestSchema,
   n8nSignalEnvelopeSchema,
+  n8nTypedDispatchRequestSchema,
   signN8nPayload,
   verifyN8nSignature,
 } from "./index.js";
@@ -10,10 +12,15 @@ import {
 const dispatchRequest = {
   tenantId: "00000000-0000-4000-8000-000000000001",
   actionId: "act_1",
-  actionType: "send_email",
+  actionType: "email.send",
   approvedBy: "founder",
   idempotencyKey: "dispatch-act-1",
-  payload: { subject: "Hello" },
+  payload: {
+    channel: "email",
+    to: ["buyer@example.com"],
+    subject: "Hello",
+    text: "Hello from GrowthOS.",
+  },
 };
 
 describe("n8n contracts", () => {
@@ -45,8 +52,111 @@ describe("n8n contracts", () => {
 
   it("validates dispatch requests", () => {
     expect(n8nDispatchRequestSchema.parse(dispatchRequest).actionType).toBe(
-      "send_email",
+      "email.send",
     );
+  });
+
+  it("builds canonical channel signal envelopes with defaults", () => {
+    const parsed = buildCanonicalN8nSignalEnvelope({
+      eventId: "reddit-comment-t3_123",
+      source: "reddit",
+      signalType: "community",
+      occurredAt: "2026-07-06T07:00:00.000Z",
+      workflowId: "wf_reddit_monitor",
+      executionId: "exec_1",
+      payload: {
+        channel: "reddit",
+        sourceRecordId: "t1_comment_123",
+        sourceUrl: "https://www.reddit.com/r/startups/comments/abc/comment/123",
+        actor: { handle: "founderbuyer" },
+        subject: "Looking for GTM workflow tools",
+        text: "Any recommendations for founder-led GTM?",
+        engagement: { kind: "comment", score: 0.72 },
+      },
+    });
+
+    expect(parsed.payload).toMatchObject({
+      channel: "reddit",
+      evidence: [],
+      metadata: {},
+    });
+  });
+
+  it("validates typed LinkedIn post dispatch payloads", () => {
+    const parsed = n8nTypedDispatchRequestSchema.parse({
+      tenantId: "00000000-0000-4000-8000-000000000001",
+      actionId: "linkedin-post-1",
+      actionType: "linkedin.post.create",
+      approvedBy: "founder",
+      idempotencyKey: "linkedin-post-1",
+      payload: {
+        channel: "linkedin",
+        postAs: "person",
+        ownerId: "urn:li:person:123",
+        text: "Shipping a new founder-led GTM workflow today.",
+      },
+    });
+
+    expect(parsed.payload).toMatchObject({
+      channel: "linkedin",
+      dryRun: false,
+      mediaUrls: [],
+      metadata: {},
+    });
+  });
+
+  it("rejects mismatched channels for typed dispatch payloads", () => {
+    expect(() =>
+      n8nTypedDispatchRequestSchema.parse({
+        tenantId: "00000000-0000-4000-8000-000000000001",
+        actionId: "linkedin-post-1",
+        actionType: "linkedin.post.create",
+        approvedBy: "founder",
+        idempotencyKey: "linkedin-post-1",
+        payload: {
+          channel: "reddit",
+          postAs: "person",
+          ownerId: "urn:li:person:123",
+          text: "Wrong channel.",
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects unsupported n8n action types", () => {
+    expect(() =>
+      n8nTypedDispatchRequestSchema.parse({
+        tenantId: "00000000-0000-4000-8000-000000000001",
+        actionId: "linkedin-scrape-1",
+        actionType: "linkedin.profile.scrape",
+        approvedBy: "founder",
+        idempotencyKey: "linkedin-scrape-1",
+        payload: {
+          channel: "linkedin",
+          profileUrl: "https://www.linkedin.com/in/example",
+        },
+      }),
+    ).toThrow("Unsupported n8n action type");
+  });
+
+  it("validates typed Reddit comment dispatch payloads", () => {
+    const parsed = n8nTypedDispatchRequestSchema.parse({
+      tenantId: "00000000-0000-4000-8000-000000000001",
+      actionId: "reddit-comment-1",
+      actionType: "reddit.comment.submit",
+      approvedBy: "founder",
+      idempotencyKey: "reddit-comment-1",
+      payload: {
+        channel: "reddit",
+        parentId: "t1_comment_123",
+        text: "Helpful answer from the founder.",
+      },
+    });
+
+    expect(parsed.payload).toMatchObject({
+      channel: "reddit",
+      parentId: "t1_comment_123",
+    });
   });
 });
 

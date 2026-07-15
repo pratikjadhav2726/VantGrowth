@@ -1,5 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import { n8nTypedDispatchRequestSchema } from "./channel-contracts.js";
+
+export * from "./channel-contracts.js";
 
 export const n8nSignalTypeValues = [
   "competitive",
@@ -120,7 +123,7 @@ export class N8nDispatchClient {
   }
 
   async dispatch(input: N8nDispatchRequest): Promise<N8nDispatchResult> {
-    const request = n8nDispatchRequestSchema.parse(input);
+    const request = n8nTypedDispatchRequestSchema.parse(input);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
