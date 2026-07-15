@@ -238,6 +238,9 @@ importers:
 
   apps/worker-learning:
     dependencies:
+      '@growthos/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db

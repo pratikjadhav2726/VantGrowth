@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type EventPublisher,
   LearningWorker,
+  type PromotionEvidenceProvider,
   buildUpdatedRubricContent,
   synthesizeLearningCandidate,
 } from "./learning-worker.js";
@@ -223,15 +224,33 @@ describe("LearningWorker.process", () => {
 describe("LearningWorker.processFromCritique", () => {
   const makeWorker = (
     playbookRepository?: InMemoryPlaybookVersionsRepository,
+    promotionEnabled = true,
   ) => {
     const outboxRepository = new InMemoryOutboxRepository();
     const eventPublisher: EventPublisher = {
       publish: vi.fn(async () => undefined),
     };
+    const promotionEvidenceProvider: PromotionEvidenceProvider = {
+      getEvaluation: async (proposal) => ({
+        proposalId: proposal.proposalId,
+        risk: "low" as const,
+        evidenceCount: 30,
+        uniqueEntities: 20,
+        confidence: 0.95,
+        metricDirection: "increase" as const,
+        baselineMetric: 0.1,
+        candidateMetric: 0.12,
+        worstGuardrailRegression: 0,
+        humanApproved: false,
+      }),
+    };
     const worker = new LearningWorker({
       outboxRepository,
       eventPublisher,
       ...(playbookRepository ? { playbookRepository } : {}),
+      ...(playbookRepository && promotionEnabled
+        ? { promotionEvidenceProvider }
+        : {}),
     });
     return { worker, outboxRepository, eventPublisher };
   };
@@ -243,6 +262,22 @@ describe("LearningWorker.processFromCritique", () => {
       makeCritiquePayload(),
     );
     expect(result).toBeNull();
+  });
+
+  it("records a proposal but does not mutate a playbook without promotion evidence", async () => {
+    const playbookRepo = new InMemoryPlaybookVersionsRepository();
+    const { worker, outboxRepository } = makeWorker(playbookRepo, false);
+
+    const result = await worker.processFromCritique(
+      tenantId,
+      makeCritiquePayload({ verdict: "revise" }),
+    );
+
+    expect(result).toBeNull();
+    expect(await playbookRepo.getActive(tenantId, "blog_draft")).toBeNull();
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.eventType).toBe("learning.playbook.change.proposed.v1");
   });
 
   it("returns null for 'approve' verdict (no corrective signal)", async () => {
@@ -325,9 +360,11 @@ describe("LearningWorker.processFromCritique", () => {
     );
 
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
-    expect(events).toHaveLength(1);
-    expect(events[0]?.eventType).toBe("learning.playbook.updated.v1");
-    expect(events[0]?.payload?.critique_id).toBe("crit-abc");
+    const updated = events.find(
+      (event) => event.eventType === "learning.playbook.updated.v1",
+    );
+    expect(events).toHaveLength(2);
+    expect(updated?.payload?.critique_id).toBe("crit-abc");
 
     expect(eventPublisher.publish).toHaveBeenCalledWith(
       `t.${tenantId}.learning.playbook.updated.v1`,
@@ -345,7 +382,10 @@ describe("LearningWorker.processFromCritique", () => {
     );
 
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
-    expect(events[0]?.payload?.verdict).toBe("reject");
+    const updated = events.find(
+      (event) => event.eventType === "learning.playbook.updated.v1",
+    );
+    expect(updated?.payload?.verdict).toBe("reject");
   });
 
   it("maps content_brief.v1 artifact kind to content_brief playbook type", async () => {
@@ -423,7 +463,10 @@ describe("LearningWorker.processFromCritique", () => {
     );
 
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
-    expect(events[0]?.payload?.criteria_added).toBe(3);
+    const updated = events.find(
+      (event) => event.eventType === "learning.playbook.updated.v1",
+    );
+    expect(updated?.payload?.criteria_added).toBe(3);
   });
 
   it("rejects invalid payload at parse boundary", async () => {

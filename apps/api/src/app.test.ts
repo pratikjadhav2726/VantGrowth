@@ -1616,6 +1616,89 @@ describe("/v1/settings", () => {
     expect(body.settings.digestEmail).toBe("ceo@acme.io");
   });
 
+  it("PATCH /v1/settings validates adaptive GTM control settings", async () => {
+    const tenantSettingsRepository = new InMemoryTenantSettingsRepository();
+    const app = createApp({ tenantSettingsRepository });
+
+    const res = await app.request("http://localhost/v1/settings", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        adaptiveGtm: {
+          productProfile: {
+            schemaVersion: "gtm_product_profile.v1",
+            tenantId,
+            product: {
+              name: "Acme",
+              description: "A sufficiently detailed SaaS product description.",
+              category: "Analytics",
+              businessModel: "b2b_saas",
+              salesMotion: "hybrid",
+              valuePropositions: ["Faster decisions"],
+            },
+            audiences: [
+              {
+                id: "operators",
+                name: "Operators",
+                pains: ["Slow reporting"],
+                desiredOutcomes: ["Faster insight"],
+              },
+            ],
+            funnel: {
+              awarenessEvent: "qualified_visit",
+              activationEvent: "dashboard_created",
+              conversionEvent: "subscription_started",
+              retentionEvent: "weekly_active_account",
+              salesCycleDays: 30,
+            },
+            goals: [
+              {
+                metric: "qualified_pipeline",
+                direction: "increase",
+                target: 100000,
+                horizonDays: 90,
+              },
+            ],
+            constraints: {
+              monthlyBudget: 10000,
+              currencies: ["USD"],
+              prohibitedClaims: [],
+              prohibitedChannels: [],
+              regulatedIndustry: false,
+            },
+          },
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { settings: Record<string, unknown> };
+    expect(body.settings.adaptiveGtm).toBeDefined();
+  });
+
+  it("PATCH /v1/settings rejects malformed adaptive GTM settings", async () => {
+    const tenantSettingsRepository = new InMemoryTenantSettingsRepository();
+    const app = createApp({ tenantSettingsRepository });
+
+    const res = await app.request("http://localhost/v1/settings", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        adaptiveGtm: {
+          productProfile: { schemaVersion: "wrong-version" },
+        },
+      }),
+    });
+
+    expect(res.status).toBe(422);
+  });
+
   it("PATCH /v1/settings shallow-merges subsequent patches", async () => {
     const tenantSettingsRepository = new InMemoryTenantSettingsRepository();
     const app = createApp({ tenantSettingsRepository });

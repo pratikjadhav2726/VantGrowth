@@ -1,3 +1,8 @@
+import {
+  type AdaptiveLearningPolicy,
+  type LearningProposalEvaluation,
+  evaluateLearningProposal,
+} from "@growthos/core";
 import type {
   OutboxRepository,
   PlaybookVersionRecord,
@@ -24,6 +29,24 @@ export interface LearningWorkerDependencies {
   outboxRepository: OutboxRepository;
   eventPublisher: EventPublisher;
   playbookRepository?: PlaybookVersionsRepository;
+  promotionEvidenceProvider?: PromotionEvidenceProvider;
+  learningPolicy?: Partial<AdaptiveLearningPolicy>;
+}
+
+export interface PlaybookChangeProposal {
+  tenantId: string;
+  proposalId: string;
+  artifactKind: string;
+  artifactId: string;
+  playbookType: "blog_draft" | "content_brief" | "intel_brief" | "custom";
+  verdict: "revise" | "reject";
+}
+
+/** Supplies outcome/attribution aggregates from the experiment store. */
+export interface PromotionEvidenceProvider {
+  getEvaluation(
+    proposal: PlaybookChangeProposal,
+  ): Promise<LearningProposalEvaluation | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,24 +278,23 @@ export class LearningWorker {
    *
    * When the critique verdict is "revise" or "reject":
    *   1. Loads the current active playbook for the artifact kind.
-   *   2. Appends new rubric criteria derived from the failure reasons.
-   *   3. Creates a new playbook version in PlaybookVersionsRepository.
-   *   4. Emits `learning.playbook.updated.v1` to outbox + NATS.
+   *   2. Emits an immutable change proposal derived from the failure reasons.
+   *   3. Requests aggregated evidence from the experiment/attribution store.
+   *   4. Creates a new version only when the shared promotion policy passes.
+   *   5. Emits `learning.playbook.updated.v1` to outbox + NATS.
    *
    * Returns the new PlaybookVersionRecord, or null when:
-   *   - No playbookRepository is configured.
+   *   - No playbookRepository or promotion evidence provider is configured.
    *   - Verdict is "approve" (no corrective signal).
    *   - Artifact kind has no known playbook type mapping.
    *
-   * The method is idempotent per critique_id: the outbox key guards against
-   * duplicate emissions if the message is redelivered.
+   * The method is idempotent per critique_id. Persisted playbook history is
+   * checked before a version is created, and outbox keys dedupe emissions.
    */
   async processFromCritique(
     tenantId: string,
     rawPayload: unknown,
   ): Promise<PlaybookVersionRecord | null> {
-    if (!this.deps.playbookRepository) return null;
-
     const critique = critiqueCompletedPayloadSchema.parse(rawPayload);
 
     // Only corrective verdicts carry signal worth learning from.
@@ -280,6 +302,64 @@ export class LearningWorker {
 
     const playbookType = resolvePlaybookType(critique.artifact_kind);
     if (!playbookType) return null;
+
+    const proposal: PlaybookChangeProposal = {
+      tenantId,
+      proposalId: `critique:${critique.critique_id}`,
+      artifactKind: critique.artifact_kind,
+      artifactId: critique.artifact_id,
+      playbookType,
+      verdict: critique.verdict,
+    };
+
+    const proposedPayload = {
+      tenant_id: tenantId,
+      proposal_id: proposal.proposalId,
+      playbook_type: playbookType,
+      artifact_kind: critique.artifact_kind,
+      artifact_id: critique.artifact_id,
+      critique_id: critique.critique_id,
+      verdict: critique.verdict,
+      confidence_score: critique.confidence_score,
+      failure_reasons: critique.reasons,
+      status: "awaiting_evidence",
+      proposed_at: new Date().toISOString(),
+    };
+
+    await this.deps.outboxRepository.enqueue({
+      tenantId,
+      eventType: "learning.playbook.change.proposed.v1",
+      idempotencyKey: `playbook-proposal:${critique.critique_id}`,
+      payload: proposedPayload,
+    });
+    await this.deps.eventPublisher.publish(
+      tenantScopedSubject(tenantId, "learning.playbook.change.proposed.v1"),
+      proposedPayload,
+    );
+
+    if (!this.deps.playbookRepository || !this.deps.promotionEvidenceProvider) {
+      return null;
+    }
+
+    const evaluation =
+      await this.deps.promotionEvidenceProvider.getEvaluation(proposal);
+    if (!evaluation) return null;
+
+    const promotion = evaluateLearningProposal(
+      evaluation,
+      this.deps.learningPolicy,
+    );
+    if (promotion.decision !== "promote") return null;
+
+    const priorVersions = await this.deps.playbookRepository.listAll(
+      tenantId,
+      playbookType,
+    );
+    const createdBy = `critique:${critique.critique_id}`;
+    const existingPromotion = priorVersions.find(
+      (version) => version.createdBy === createdBy,
+    );
+    if (existingPromotion) return existingPromotion;
 
     const existing = await this.deps.playbookRepository.getActive(
       tenantId,
@@ -296,7 +376,7 @@ export class LearningWorker {
         `Auto-updated from critique verdict "${critique.verdict}". ` +
         `Added ${addedCriteria.length} criterion(s) from ${critique.reasons.length} failure reason(s).`,
       content: updatedContent as Record<string, unknown>,
-      createdBy: `critique:${critique.critique_id}`,
+      createdBy,
       effectiveAt: new Date(),
     });
 
@@ -309,6 +389,8 @@ export class LearningWorker {
       critique_id: critique.critique_id,
       verdict: critique.verdict,
       criteria_added: addedCriteria.length,
+      proposal_id: proposal.proposalId,
+      relative_lift: promotion.relativeLift,
       updated_at: new Date().toISOString(),
     };
 

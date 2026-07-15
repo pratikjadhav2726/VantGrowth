@@ -140,6 +140,7 @@ CI runs on PR/push:
 ## Docs
 
 - Architecture: `Growthos_v4_Technical_Architecture.md`
+- Adaptive/self-learning harness: `docs/ADAPTIVE_GTM_HARNESS.md`
 - Stack decisions: `Growthos_v4_Stack_Decisions.md`
 - Implementation status: `Growthos_v4_Implementation_Plan.md`
 - Paperclip integration notes: `paperclip_guide.md`
