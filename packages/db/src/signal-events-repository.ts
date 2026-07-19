@@ -14,7 +14,7 @@
  * Director calls `markProcessed()` after including a signal in a brief.
  */
 
-import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { tenantIdSchema } from "./contracts.js";
 import type { GrowthOsDb } from "./db.js";
@@ -35,6 +35,9 @@ export const signalEventRecordSchema = z.object({
   externalId: z.string().nullable(),
   payload: z.record(z.unknown()),
   processedAt: z.date().nullable(),
+  processingLeaseOwner: z.string().nullable(),
+  processingLeaseExpiresAt: z.date().nullable(),
+  processingAttempts: z.number().int().nonnegative(),
   createdAt: z.date(),
 });
 
@@ -53,6 +56,15 @@ export interface IngestSignalResult {
   /** True when a record with the same (tenant, source, externalId) already existed. */
   isDuplicate: boolean;
 }
+
+export const signalProcessingClaimSchema = z.object({
+  owner: z.string().min(1).max(255),
+  leaseMs: z.number().int().min(1_000).max(15 * 60_000),
+});
+
+export type SignalProcessingClaim = z.infer<
+  typeof signalProcessingClaimSchema
+>;
 
 // ─── Repository interface ────────────────────────────────────────────────────
 
@@ -73,6 +85,18 @@ export interface SignalEventsRepository {
     limit: number,
   ): Promise<SignalEventRecord[]>;
 
+  /**
+   * Atomically reserves unprocessed rows for one router replica. Rows with an
+   * expired lease are recoverable after a process crash; active leases are
+   * never returned to another worker.
+   */
+  claimUnprocessed(
+    tenantId: string,
+    signalType: SignalTypeValue,
+    limit: number,
+    claim: SignalProcessingClaim,
+  ): Promise<SignalEventRecord[]>;
+
   /** Counts signals created at or after `since` for tenant-level reporting. */
   countSince(tenantId: string, since: Date): Promise<number>;
 
@@ -81,6 +105,9 @@ export interface SignalEventsRepository {
    * Idempotent: already-processed records are not updated again.
    */
   markProcessed(tenantId: string, ids: bigint[]): Promise<void>;
+
+  /** Releases a failed claim early so bounded retry logic can recover it. */
+  releaseClaims(tenantId: string, ids: bigint[], owner: string): Promise<void>;
 }
 
 // ─── In-memory implementation ────────────────────────────────────────────────
@@ -128,6 +155,9 @@ export class InMemorySignalEventsRepository implements SignalEventsRepository {
       externalId: params.externalId ?? null,
       payload: params.payload,
       processedAt: null,
+      processingLeaseOwner: null,
+      processingLeaseExpiresAt: null,
+      processingAttempts: 0,
       createdAt: new Date(),
     });
 
@@ -151,6 +181,50 @@ export class InMemorySignalEventsRepository implements SignalEventsRepository {
       .slice(0, limit);
   }
 
+  async claimUnprocessed(
+    tenantId: string,
+    signalType: SignalTypeValue,
+    limit: number,
+    claimInput: SignalProcessingClaim,
+  ): Promise<SignalEventRecord[]> {
+    tenantIdSchema.parse(tenantId);
+    const claim = signalProcessingClaimSchema.parse(claimInput);
+    const now = new Date();
+    const leaseExpiresAt = new Date(now.getTime() + claim.leaseMs);
+    const claimed = this.records
+      .filter(
+        (record) =>
+          record.tenantId === tenantId &&
+          record.signalType === signalType &&
+          record.processedAt === null &&
+          (record.processingLeaseExpiresAt === null ||
+            record.processingLeaseExpiresAt.getTime() <= now.getTime()),
+      )
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .slice(0, limit);
+
+    for (const record of claimed) {
+      const index = this.records.findIndex((candidate) => candidate.id === record.id);
+      if (index < 0) continue;
+      const updated = signalEventRecordSchema.parse({
+        ...record,
+        processingLeaseOwner: claim.owner,
+        processingLeaseExpiresAt: leaseExpiresAt,
+        processingAttempts: record.processingAttempts + 1,
+      });
+      this.records[index] = updated;
+    }
+
+    return claimed.map((record) =>
+      signalEventRecordSchema.parse({
+        ...record,
+        processingLeaseOwner: claim.owner,
+        processingLeaseExpiresAt: leaseExpiresAt,
+        processingAttempts: record.processingAttempts + 1,
+      }),
+    );
+  }
+
   async countSince(tenantId: string, since: Date): Promise<number> {
     return this.records.filter(
       (r) =>
@@ -169,7 +243,36 @@ export class InMemorySignalEventsRepository implements SignalEventsRepository {
         idSet.has(r.id) &&
         r.processedAt === null
       ) {
-        this.records[i] = { ...r, processedAt: now };
+        this.records[i] = {
+          ...r,
+          processedAt: now,
+          processingLeaseOwner: null,
+          processingLeaseExpiresAt: null,
+        };
+      }
+    }
+  }
+
+  async releaseClaims(
+    tenantId: string,
+    ids: bigint[],
+    owner: string,
+  ): Promise<void> {
+    const idSet = new Set(ids);
+    for (let index = 0; index < this.records.length; index++) {
+      const record = this.records[index];
+      if (
+        record &&
+        record.tenantId === tenantId &&
+        idSet.has(record.id) &&
+        record.processedAt === null &&
+        record.processingLeaseOwner === owner
+      ) {
+        this.records[index] = {
+          ...record,
+          processingLeaseOwner: null,
+          processingLeaseExpiresAt: null,
+        };
       }
     }
   }
@@ -186,6 +289,9 @@ const mapRow = (row: typeof signalEvents.$inferSelect): SignalEventRecord =>
     externalId: row.externalId ?? null,
     payload: row.payload,
     processedAt: row.processedAt ?? null,
+    processingLeaseOwner: row.processingLeaseOwner ?? null,
+    processingLeaseExpiresAt: row.processingLeaseExpiresAt ?? null,
+    processingAttempts: row.processingAttempts,
     createdAt: row.createdAt,
   });
 
@@ -283,6 +389,61 @@ export class PostgresSignalEventsRepository implements SignalEventsRepository {
     return results;
   }
 
+  async claimUnprocessed(
+    tenantId: string,
+    signalType: SignalTypeValue,
+    limit: number,
+    claimInput: SignalProcessingClaim,
+  ): Promise<SignalEventRecord[]> {
+    tenantIdSchema.parse(tenantId);
+    const claim = signalProcessingClaimSchema.parse(claimInput);
+    const now = new Date();
+    const leaseExpiresAt = new Date(now.getTime() + claim.leaseMs);
+    let results: SignalEventRecord[] = [];
+
+    await this.db.transaction(async (tx) => {
+      await setTenantContext(tx, tenantId);
+      const claimable = await tx
+        .select({ id: signalEvents.id })
+        .from(signalEvents)
+        .where(
+          and(
+            eq(signalEvents.tenantId, tenantId),
+            eq(signalEvents.signalType, signalType),
+            isNull(signalEvents.processedAt),
+            or(
+              isNull(signalEvents.processingLeaseExpiresAt),
+              lte(signalEvents.processingLeaseExpiresAt, now),
+            ),
+          ),
+        )
+        .orderBy(signalEvents.id)
+        .limit(limit)
+        .for("update", { skipLocked: true });
+
+      if (claimable.length === 0) return;
+      const claimedIds = claimable.map((row) => row.id);
+      const rows = await tx
+        .update(signalEvents)
+        .set({
+          processingLeaseOwner: claim.owner,
+          processingLeaseExpiresAt: leaseExpiresAt,
+          processingAttempts: sql`${signalEvents.processingAttempts} + 1`,
+        })
+        .where(
+          and(
+            eq(signalEvents.tenantId, tenantId),
+            inArray(signalEvents.id, claimedIds),
+            isNull(signalEvents.processedAt),
+          ),
+        )
+        .returning();
+      results = rows.map(mapRow);
+    });
+
+    return results;
+  }
+
   async markProcessed(tenantId: string, ids: bigint[]): Promise<void> {
     if (ids.length === 0) return;
     tenantIdSchema.parse(tenantId);
@@ -291,11 +452,42 @@ export class PostgresSignalEventsRepository implements SignalEventsRepository {
       await setTenantContext(tx, tenantId);
       await tx
         .update(signalEvents)
-        .set({ processedAt: new Date() })
+        .set({
+          processedAt: new Date(),
+          processingLeaseOwner: null,
+          processingLeaseExpiresAt: null,
+        })
         .where(
           and(
             eq(signalEvents.tenantId, tenantId),
             inArray(signalEvents.id, ids),
+            isNull(signalEvents.processedAt),
+          ),
+        );
+    });
+  }
+
+  async releaseClaims(
+    tenantId: string,
+    ids: bigint[],
+    owner: string,
+  ): Promise<void> {
+    if (ids.length === 0) return;
+    tenantIdSchema.parse(tenantId);
+
+    await this.db.transaction(async (tx) => {
+      await setTenantContext(tx, tenantId);
+      await tx
+        .update(signalEvents)
+        .set({
+          processingLeaseOwner: null,
+          processingLeaseExpiresAt: null,
+        })
+        .where(
+          and(
+            eq(signalEvents.tenantId, tenantId),
+            inArray(signalEvents.id, ids),
+            eq(signalEvents.processingLeaseOwner, owner),
             isNull(signalEvents.processedAt),
           ),
         );

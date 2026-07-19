@@ -37,7 +37,6 @@ import {
   intelBriefV1Schema,
 } from "@growthos/core";
 import type { OutboxRepository } from "@growthos/db";
-import { tenantScopedSubject } from "@growthos/db";
 import {
   CONTENT_BRIEF_GENERATE_STRUCTURED_PROMPT,
   type LlmCallRunner,
@@ -70,9 +69,22 @@ export const expandOpportunity = (
     abm: "case_study",
   };
 
+  const evidence = [
+    ...brief.competitive_signals.map((signal) => ({
+      type: "competitor_move" as const,
+      description: `${signal.competitor}: ${signal.summary}`,
+      ...(signal.source_url ? { source_url: signal.source_url } : {}),
+    })),
+    ...brief.community_signals.map((signal) => ({
+      type: "community_pain" as const,
+      description: `${signal.platform}: ${signal.summary}`,
+    })),
+  ];
+
   const opportunity: ContentOpportunityV1 = {
     schema_version: "content_opportunity.v1",
     tenant_id: brief.tenant_id,
+    ...(brief.experiment_id ? { experiment_id: brief.experiment_id } : {}),
     opportunity_id: ref.opportunity_id,
     source_brief_id: brief.brief_id,
     title: ref.title,
@@ -83,13 +95,16 @@ export const expandOpportunity = (
       ref.motion_fit.length > 0 ? ref.motion_fit : ["inbound_content"],
     urgency: ref.urgency,
     content_format: formatByMotion[primaryMotion] ?? "long_form_blog",
-    evidence: [
-      {
-        type: "search_trend",
-        description:
-          "Baseline evidence placeholder — populate with competitive + community signal data once LLM integration is active.",
-      },
-    ],
+    evidence:
+      evidence.length > 0
+        ? evidence
+        : [
+            {
+              type: "search_trend",
+              description:
+                "No source-specific evidence was attached to this brief. Treat as a draft hypothesis until validated.",
+            },
+          ],
     score: ref.score,
     created_at: new Date().toISOString(),
   };
@@ -116,6 +131,9 @@ export const generateContentBrief = (
   const brief: ContentBriefV1 = {
     schema_version: "content_brief.v1",
     tenant_id: opportunity.tenant_id,
+    ...(opportunity.experiment_id
+      ? { experiment_id: opportunity.experiment_id }
+      : {}),
     brief_id: crypto.randomUUID(),
     opportunity_id: opportunity.opportunity_id,
     generated_at: new Date().toISOString(),
@@ -265,17 +283,30 @@ export const generateLlmContentBrief = async (
 
   try {
     const raw = JSON.parse(match[0]) as unknown;
-    const augmented =
+    const safeRaw =
       typeof raw === "object" && raw !== null
+        ? (() => {
+            const { experiment_id: _untrustedExperimentId, ...rest } = raw as Record<
+              string,
+              unknown
+            >;
+            return rest;
+          })()
+        : raw;
+    const augmented =
+      typeof safeRaw === "object" && safeRaw !== null
         ? {
-            ...raw,
+            ...safeRaw,
             tenant_id: opportunity.tenant_id,
+            ...(opportunity.experiment_id
+              ? { experiment_id: opportunity.experiment_id }
+              : {}),
             opportunity_id: opportunity.opportunity_id,
             generated_at:
-              (raw as Record<string, unknown>).generated_at ??
+              (safeRaw as Record<string, unknown>).generated_at ??
               new Date().toISOString(),
           }
-        : raw;
+        : safeRaw;
     return contentBriefV1Schema.parse(augmented);
   } catch {
     return null;
@@ -288,7 +319,8 @@ export const generateLlmContentBrief = async (
 
 export interface ContentStrategistWorkerDependencies {
   outboxRepository: OutboxRepository;
-  eventPublisher: EventPublisher;
+  /** Delivery is outbox-only; retained as an optional compatibility seam. */
+  eventPublisher?: EventPublisher;
   /**
    * Optional LLM runner.  When present, `processBrief()` attempts to generate
    * `ContentBriefV1` via `generateLlmContentBrief()` before falling back to
@@ -340,16 +372,6 @@ export class ContentStrategistWorker {
 
       await this.deps.outboxRepository.enqueue(oppCommand);
       await this.deps.outboxRepository.enqueue(briefCommand);
-
-      // Publish immediately for live consumers
-      await this.deps.eventPublisher.publish(
-        tenantScopedSubject(brief.tenant_id, "content_opportunity.v1"),
-        oppCommand.payload,
-      );
-      await this.deps.eventPublisher.publish(
-        tenantScopedSubject(brief.tenant_id, "content_brief.v1"),
-        briefCommand.payload,
-      );
 
       opportunities.push(opportunity);
       briefs.push(contentBrief);

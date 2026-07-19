@@ -11,6 +11,16 @@ const migrationPath = new URL(
   import.meta.url,
 );
 
+const externalActionsMigrationPath = new URL(
+  "../drizzle/0004_external_action_lifecycle.sql",
+  import.meta.url,
+);
+
+const adaptiveControlPlaneMigrationPath = new URL(
+  "../drizzle/0003_adaptive_control_plane.sql",
+  import.meta.url,
+);
+
 const atlasSumPath = new URL("../drizzle/atlas.sum", import.meta.url);
 
 describe("Atlas migration integrity (drizzle/)", () => {
@@ -87,6 +97,75 @@ describe("drizzle migration: 0000_yielding_inertia", () => {
       .filter((b) => !b.startsWith("\n--"));
     for (const block of blocks) {
       expect(block).toContain('"tenant_id" uuid NOT NULL');
+    }
+  });
+});
+
+describe("drizzle migration: 0004_external_action_lifecycle", () => {
+  it("creates the action ledger and append-only event audit trail", async () => {
+    const sql = await readFile(externalActionsMigrationPath, "utf8");
+    expect(sql).toContain('CREATE TABLE "growthos"."external_actions"');
+    expect(sql).toContain('CREATE TABLE "growthos"."external_action_events"');
+    expect(sql).toContain(
+      'CONSTRAINT "external_actions_tenant_action_id_unique" UNIQUE("tenant_id","action_id")',
+    );
+    expect(sql).toContain(
+      'CONSTRAINT "external_action_events_tenant_action_event_key_unique" UNIQUE("tenant_id","external_action_id","event_key")',
+    );
+  });
+
+  it("fails closed with tenant RLS on both lifecycle tables", async () => {
+    const sql = await readFile(externalActionsMigrationPath, "utf8");
+    for (const table of ["external_actions", "external_action_events"]) {
+      expect(sql).toContain(
+        `ALTER TABLE "growthos"."${table}" ENABLE ROW LEVEL SECURITY`,
+      );
+      expect(sql).toContain(
+        `ALTER TABLE "growthos"."${table}" FORCE ROW LEVEL SECURITY`,
+      );
+      expect(sql).toContain(`${table}_tenant_isolation`);
+    }
+  });
+});
+
+describe("drizzle migration: 0003_adaptive_control_plane", () => {
+  it("creates the tenant-scoped experiment, learning, health, and incident stores", async () => {
+    const sql = await readFile(adaptiveControlPlaneMigrationPath, "utf8");
+    for (const table of [
+      "experiments",
+      "experiment_assignments",
+      "experiment_observations",
+      "learning_proposals",
+      "component_health",
+      "incidents",
+    ]) {
+      expect(sql).toContain(`CREATE TABLE "growthos"."${table}"`);
+    }
+    expect(sql).toContain(
+      'CONSTRAINT "experiment_observations_tenant_experiment_idempotency_unique" UNIQUE("tenant_id","experiment_id","idempotency_key")',
+    );
+    expect(sql).toContain(
+      'CONSTRAINT "learning_proposals_tenant_proposal_key_unique" UNIQUE("tenant_id","proposal_key")',
+    );
+  });
+
+  it("forces tenant RLS on every adaptive control-plane table", async () => {
+    const sql = await readFile(adaptiveControlPlaneMigrationPath, "utf8");
+    for (const table of [
+      "experiments",
+      "experiment_assignments",
+      "experiment_observations",
+      "learning_proposals",
+      "component_health",
+      "incidents",
+    ]) {
+      expect(sql).toContain(
+        `ALTER TABLE "growthos"."${table}" ENABLE ROW LEVEL SECURITY`,
+      );
+      expect(sql).toContain(
+        `ALTER TABLE "growthos"."${table}" FORCE ROW LEVEL SECURITY`,
+      );
+      expect(sql).toContain(`${table}_tenant_isolation`);
     }
   });
 });

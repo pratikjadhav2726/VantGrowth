@@ -1,7 +1,10 @@
 # Adaptive GTM Harness
 
-**Status:** Foundation implemented  
+**Status:** Durable, evidence-governed loop implemented
 **Contract:** `gtm_product_profile.v1`
+**Runtime note:** This document describes implemented code and checked-in
+configuration. It is not an attestation that a local Docker Compose runtime has
+been started.
 
 ## Product goal
 
@@ -11,40 +14,73 @@ success definition in agent code. It improves through measured outcomes and
 recovers from operational failures without bypassing commercial or safety
 controls.
 
-The platform is not considered successful because it generated more activity.
-It is successful when it improves the tenant's declared business outcomes while
+The platform is not successful because it generated more activity. It is
+successful when it improves the tenant's declared business outcomes while
 staying inside cost, brand, compliance, consent, and channel guardrails.
 
-## Closed-loop model
+## Delivered durable loop
+
+The adaptive loop is now split into an auditable control plane and a recoverable
+data plane:
 
 ```text
-Product profile + goals + constraints
+Tenant profile, goals, constraints
                  │
                  ▼
-        Sense market and funnel signals
+API or signed n8n signal ingestion
                  │
                  ▼
-      Decide motion, segment, offer, channel
+tenant-scoped signal_events inbox (idempotent)
                  │
                  ▼
-       Execute through governed workflows
+leased signal router → transactional outbox
                  │
                  ▼
-   Measure outcomes, cost, quality, attribution
+JetStream durable consumers
+  intel → content → blog draft → critique → learning
+  attribution / warmth signals → durable evaluations
                  │
                  ▼
- Experiment → critique → evidence gate → promote
-                 │                         │
-                 └──── rollback ◄──────────┘
+outcomes, approval feedback, and experiment observations
+                 │
+                 ▼
+evidence gate → human approval when required → immutable promotion
+                 │                                      │
+                 └───────── regression / rollback ◄─────┘
+
+Failure path: bounded retry → worker.dead_lettered.v1 outbox event
+              → sanitized control-plane incident → operator triage
 ```
 
-Every decision must retain the input snapshot, model and prompt versions,
-playbook version, policy version, evidence, cost, output, approval, and observed
-outcome. This makes learning auditable, replayable, tenant-scoped, and reversible.
+In the delivered worker entrypoints, the transactional outbox is the only
+runtime publisher to JetStream. Workers acknowledge durable messages only after
+their tenant-scoped state transition and downstream outbox event are committed.
+This preserves at-least-once delivery without allowing a direct publish to race
+a database commit.
+
+## Durable control-plane state
+
+The adaptive control plane persists the records needed to make the loop
+inspectable and reversible:
+
+- Experiments define a bounded hypothesis, unit, variants, primary metric,
+  guardrails, versions, and input snapshot.
+- Assignments keep variant exposure sticky per tenant and entity.
+- Observations are append-only, idempotent evidence with attribution confidence,
+  cost, source, outcome, and evidence fields.
+- Learning proposals retain the evidence-gated lifecycle from collection through
+  approval, promotion, or rollback.
+- Component-health decisions and incidents are tenant-scoped operational state,
+  not log-only signals.
+
+The corresponding tables are protected by tenant RLS. Repository operations set
+tenant context inside the same database transaction that performs the read or
+write. See the [control-plane repository](../packages/db/src/adaptive-control-plane-repository.ts)
+and [migration](../packages/db/drizzle/0003_adaptive_control_plane.sql).
 
 ## Universal product context
 
-`@growthos/core` now owns a strict `gtmProductProfileSchema`. It describes:
+`@growthos/core` owns the strict `gtmProductProfileSchema`. It describes:
 
 - the product, business model, sales motion, value propositions, and proof;
 - multiple audiences with pains, outcomes, triggers, and explicit exclusions;
@@ -52,83 +88,96 @@ outcome. This makes learning auditable, replayable, tenant-scoped, and reversibl
 - measurable goals and time horizons;
 - budget, currency, claim, channel, and regulatory constraints.
 
-Workers consume this profile instead of hard-coded vertical assumptions. The
-profile is accepted under the tenant setting key `adaptiveGtm`, where the API
-validates it before persistence.
+The profile is stored under the tenant setting key `adaptiveGtm`; the API
+validates it before persistence. Workers consume the profile rather than a
+hard-coded vertical assumption.
 
-## Self-learning policy
+## Evidence-governed learning
 
-One review, click, critique, or conversion is an observation—not a learning.
-`evaluateLearningProposal` applies a deterministic promotion gate:
+One review, click, critique, or conversion is an observation, not a learning.
+`evaluateLearningProposal` uses persisted A/B evidence to apply a deterministic
+promotion gate:
 
-1. Collect a minimum number of observations across independent entities.
-2. Require a configured confidence level.
-3. Compare the candidate with a baseline or holdout.
-4. Reject any candidate that harms a guardrail beyond tolerance.
-5. Require a minimum relative lift.
-6. Require a human decision for high- and critical-risk changes.
-7. Promote a new immutable version; never mutate the active version in place.
-8. Continue monitoring and automatically roll back on regression.
+1. Require the configured observation count and independent entities.
+2. Compare candidate and baseline metrics.
+3. Enforce confidence, relative-lift, and guardrail thresholds.
+4. Keep attribution confidence visible rather than treating weak attribution as
+   causal proof.
+5. Require human approval for proposals that need it.
+6. Re-read the latest evidence after that approval; approval is not a waiver for
+   a later regression or guardrail breach.
+7. Promote only after an immutable version exists, and retain a rollback
+   reference.
 
-Useful learning signals include approval edits, rejection reasons, replies,
-meetings, opportunities, activation, conversion, retention, revenue, cost,
-unsubscribes, complaints, and policy violations. Attribution confidence must be
-stored with the outcome so weak attribution cannot become strong policy.
+Approval of a learning proposal atomically changes its lifecycle state and adds
+`learning.proposal.approved.v1` to the outbox. The Learning Worker consumes that
+event durably and re-evaluates evidence before any promotion. The normal artifact
+approval route similarly records feedback and emits a durable
+`learning.signal.v1` event.
 
-## Self-healing policy
+## Bounded recovery and incident visibility
 
-`decideHealingAction` gives agents, workflows, and connectors one shared health
-state machine:
+The shared JetStream consumer gives workers an explicit acknowledgement boundary,
+maximum delivery count, retry delay, and maximum pending messages. When a message
+exhausts its retry budget, the worker writes `worker.dead_lettered.v1` to the
+tenant outbox. The outbox publisher materializes a sanitized incident before it
+marks that event consumed.
 
-```text
-healthy ──threshold breach──► degraded ──retry──► recovering
-   ▲                              │                   │
-   └────────health checks pass────┴───────────────────┘
-                                  │
-                     attempts exhausted / guardrail breach
-                                  ▼
-                             quarantined
-                         rollback + escalation
-```
-
-The decision uses dependency availability, error rate, consecutive failures,
-latency, staleness, recovery attempts, fallback availability, and the presence
-of a last-known-good version. External actions stop during unsafe recovery or
-quarantine. Recovery is bounded and uses exponential backoff; it never retries
-forever.
+This means operators can use the tenant-scoped control-plane APIs to see a
+failure without exposing raw connector payloads or stack traces to a generic
+dashboard. Raw dead-letter payloads remain protected operational data. The
+[adaptive runtime runbook](runbooks/adaptive-gtm-local-runtime.md) covers the
+safe inspection path.
 
 ## SaaS control-plane boundaries
 
-- **Tenant isolation:** profile, evidence, experiments, versions, budgets, and
-  incidents are always tenant-scoped and protected by RLS.
-- **Control plane:** policy, approvals, budgets, version promotion, health, and
-  audit history.
-- **Data plane:** signal ingestion, content generation, outreach, connector
-  dispatch, and outcome capture.
-- **Risk tiers:** internal read-only actions may run automatically; public,
-  commercial, personal-data, spend, and destructive actions require stricter
-  policy and approval.
-- **Last known good:** prompts, models, playbooks, skills, routing, and connector
-  configuration are immutable versions with a rollback pointer.
-- **Evaluation:** offline replay prevents obvious regressions; online canaries
-  establish causal lift before general promotion.
+- **Tenant isolation:** profiles, experiments, evidence, proposals, health, and
+  incidents are tenant-scoped; tenant identity is supplied by request headers or
+  tenant-scoped event subjects, never by an untrusted body field.
+- **Control plane:** policy, approvals, budget-aware decisions, lifecycle
+  promotion, health, and incident history.
+- **Data plane:** signal ingestion, routing, generated artifacts, connector
+  dispatch, durable worker processing, and outcome capture.
+- **Risk tiers:** public, commercial, personal-data, spend, and destructive
+  actions require stricter policy and approval boundaries.
+- **Last known good:** prompts, models, playbooks, skills, routing, and
+  connector configuration are immutable versions with rollback references.
+- **External actions:** the n8n dispatch lifecycle is idempotent and records a
+  terminal callback before a request is settled.
 
-## Delivery sequence
+## Operator-facing interfaces
 
-The contracts and deterministic decision engines are implemented. The remaining
-production wiring should proceed in this order:
+The API exposes tenant-scoped surfaces for the delivered loop:
 
-1. Persist experiment assignments, observations, proposals, incidents, and
-   component health in tenant-scoped Postgres tables. The Learning Worker now
-   emits proposals and requires an evidence provider before promotion; durable
-   evidence aggregation is the next storage step.
-2. Wrap n8n, LLM, NATS, and external-channel calls with the healing decision,
-   idempotency keys, retry budgets, fallbacks, and dead-letter recovery.
-3. Feed attribution and funnel outcomes back into experiment observations.
-4. Add a founder control-center view for goals, live experiments, learned
-   changes, rollbacks, health, incidents, spend, and autonomy settings.
-5. Run canary promotion by tenant/segment, then widen only after guardrail and
-   outcome checks pass.
+- `POST /v1/signals` for idempotent signal ingestion.
+- `POST /v1/experiments`, lifecycle/assignment endpoints, and `POST /v1/outcomes`
+  for experiment evidence.
+- `GET /v1/approvals` and `POST /v1/approvals/decide` for artifact feedback.
+- `GET /v1/learning-proposals` and `POST /v1/learning-proposals/:id/approve`
+  for proposal governance.
+- `GET /v1/control-plane/summary`, `/health`, and `/incidents` for the
+  founder-safe operational read model.
+
+When `GROWTHOS_API_SERVICE_TOKEN` is set, control-plane reads require its
+bearer token. `/summary` reports `partial` and per-source availability rather
+than presenting an unavailable source as empty or healthy; `/health` and
+`/incidents` return `503` when their respective stores are unavailable.
+
+## Operational completion criteria
+
+The code path is durable, but production operation still requires deliberate
+configuration and evidence discipline:
+
+1. Configure unique production secrets, tenant allowlists, NATS/Postgres
+   endpoints, and external callback URLs; do not reuse development defaults.
+2. Run migrations and use the [operator runbook](runbooks/adaptive-gtm-local-runtime.md)
+   to verify the signal, experiment, outcome, approval, and incident read paths.
+3. Monitor outbox depth, JetStream consumer health, component health, and open
+   incidents before enabling unattended actions.
+4. Calibrate metric definitions, attribution models, minimum sample sizes, and
+   guardrail tolerances per tenant before trusting a promotion recommendation.
+5. Keep public or commercial execution behind the applicable approval and n8n
+   callback policy.
 
 ## Non-negotiable invariants
 

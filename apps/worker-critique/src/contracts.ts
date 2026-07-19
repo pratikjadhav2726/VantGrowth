@@ -9,6 +9,10 @@ export const critiqueRequestSchema = z.object({
   source: z.string().min(1),
   artifactKind: z.string().min(1),
   artifactId: z.string().min(1),
+  /** Explicit experiment lineage supplied by the producing motion/canary. */
+  experimentId: z.string().uuid().optional(),
+  /** Explicit policy-derived change risk; it must not be model-derived. */
+  changeRisk: z.enum(["low", "medium", "high", "critical"]).optional(),
   promptVersion: z.string().min(1),
   candidateOutput: z.string().min(1),
   reviewerNotes: z.array(z.string().min(1)).default([]),

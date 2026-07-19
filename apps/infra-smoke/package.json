@@ -15,7 +15,13 @@
   "dependencies": {
     "@growthos/core": "workspace:^",
     "@growthos/db": "workspace:*",
+    "@growthos/worker-blog-draft": "workspace:*",
+    "@growthos/worker-content-strategist": "workspace:*",
+    "@growthos/worker-critique": "workspace:*",
+    "@growthos/worker-intel-director": "workspace:*",
+    "@growthos/worker-learning": "workspace:*",
     "@growthos/worker-outbox-publisher": "workspace:*",
+    "@growthos/worker-signal-router": "workspace:*",
     "nats": "^2.29.3",
     "zod": "^3.23.8"
   },

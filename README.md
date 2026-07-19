@@ -39,8 +39,8 @@ docker compose -f compose.dev.yaml up --build -d
 docker compose -f compose.dev.yaml ps
 ```
 
-- Web: `http://localhost:3000`
-- API: `http://localhost:3001`
+- Web: `http://localhost:3080`
+- API: `http://localhost:3091`
 
 Default login for local demo:
 

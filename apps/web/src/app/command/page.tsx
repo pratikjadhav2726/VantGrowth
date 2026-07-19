@@ -1,14 +1,23 @@
 /**
  * Command Center — the one-page operational view.
  *
- * LIVE: the Approval Queue (from /v1/approvals) + the agent roster (real workers).
- * DEMO SCENARIO (labeled): signal feed, next-best-actions, channel health,
- * pipeline counts — representing the view once ingestion + dispatch are wired.
+ * LIVE: the tenant-scoped control-plane snapshot and approval queue.
+ * DEMO SCENARIO (explicitly labeled below): signal feed, next-best-actions,
+ * channel health, warmth, and pipeline examples.
  */
 
 import { StatusBadge } from "@/components/status-badge";
 import { AGENTS, STATUS_META } from "@/lib/agent-catalog";
-import { getMotionOverview, listApprovals } from "@/lib/api-client";
+import {
+  type ControlPlaneHealthResponse,
+  type ControlPlaneIncidentResponse,
+  type ControlPlaneSummary,
+  getControlPlaneHealth,
+  getControlPlaneSummary,
+  getMotionOverview,
+  listApprovals,
+  listControlPlaneIncidents,
+} from "@/lib/api-client";
 import {
   AGENT_RUNTIME,
   CHANNELS,
@@ -36,25 +45,35 @@ interface ApprovalItem {
   payload: { title?: string; meta_description?: string };
 }
 
+interface ApprovalLoad {
+  items: ApprovalItem[];
+  failed: boolean;
+}
+
 const TYPE_LABEL: Record<string, string> = {
   "blog_draft.v1": "Blog",
   "content_brief.v1": "Brief",
   "intel_brief.v1": "Intel",
 };
 
-async function loadApprovals(): Promise<ApprovalItem[]> {
+async function loadApprovals(): Promise<ApprovalLoad> {
   try {
     const types = ["intel_brief.v1", "blog_draft.v1", "content_brief.v1"];
-    const results = await Promise.all(
-      types.map((t) =>
-        listApprovals(DEV_TENANT_ID, { outputType: t, limit: 5 }).catch(() => ({
-          items: [],
-        })),
+    const results = await Promise.allSettled(
+      types.map((type) =>
+        listApprovals(DEV_TENANT_ID, { outputType: type, limit: 5 }),
       ),
     );
-    return results.flatMap((r) => r.items as ApprovalItem[]);
+    return {
+      items: results.flatMap((result) =>
+        result.status === "fulfilled"
+          ? (result.value.items as ApprovalItem[])
+          : [],
+      ),
+      failed: results.some((result) => result.status === "rejected"),
+    };
   } catch {
-    return [];
+    return { items: [], failed: true };
   }
 }
 
@@ -67,6 +86,7 @@ interface ScoredMotion {
 async function loadMotions(): Promise<{
   motions: ScoredMotion[];
   rationale: string[];
+  failed: boolean;
 }> {
   try {
     const overview = await getMotionOverview(DEV_TENANT_ID);
@@ -86,72 +106,315 @@ async function loadMotions(): Promise<{
         tier: tierOf(label),
       }))
       .sort((a, b) => b.score - a.score);
-    return { motions, rationale: overview.latestScore?.rationale ?? [] };
+    return {
+      motions,
+      rationale: overview.latestScore?.rationale ?? [],
+      failed: false,
+    };
   } catch {
-    return { motions: [], rationale: [] };
+    return { motions: [], rationale: [], failed: true };
   }
 }
 
+type ControlPlaneSource = keyof ControlPlaneSummary["dataSources"];
+type ControlPlaneSourceStatus =
+  ControlPlaneSummary["dataSources"][ControlPlaneSource];
+
+interface ControlPlaneLoad<T> {
+  data: T | null;
+  failed: boolean;
+}
+
+interface OperationalSnapshot {
+  summary: ControlPlaneLoad<ControlPlaneSummary>;
+  health: ControlPlaneLoad<ControlPlaneHealthResponse>;
+  incidents: ControlPlaneLoad<ControlPlaneIncidentResponse>;
+}
+
+const loadControlPlaneResource = async <T,>(
+  loader: () => Promise<T>,
+): Promise<ControlPlaneLoad<T>> => {
+  try {
+    return { data: await loader(), failed: false };
+  } catch {
+    return { data: null, failed: true };
+  }
+};
+
+async function loadOperationalSnapshot(): Promise<OperationalSnapshot> {
+  const [summary, health, incidents] = await Promise.all([
+    loadControlPlaneResource(() => getControlPlaneSummary(DEV_TENANT_ID)),
+    loadControlPlaneResource(() => getControlPlaneHealth(DEV_TENANT_ID, 25)),
+    loadControlPlaneResource(() =>
+      listControlPlaneIncidents(DEV_TENANT_ID, 10),
+    ),
+  ]);
+  return { summary, health, incidents };
+}
+
+const sourceStatus = (
+  snapshot: OperationalSnapshot,
+  source: ControlPlaneSource,
+  endpointAvailable = false,
+): ControlPlaneSourceStatus =>
+  snapshot.summary.data?.dataSources[source] ??
+  (endpointAvailable ? "available" : "unavailable");
+
+const isSourceAvailable = (status: ControlPlaneSourceStatus): boolean =>
+  status === "available";
+
+const sourceLabel: Record<ControlPlaneSource, string> = {
+  signals: "Signals",
+  outbox: "Outbox",
+  approvals: "Approvals",
+  motion: "Motion",
+  componentHealth: "Health",
+  incidents: "Incidents",
+  experiments: "Experiments",
+  learningProposals: "Learning",
+};
+
+const sourceStatusMeta: Record<
+  ControlPlaneSourceStatus,
+  { label: string; dot: string; chip: string }
+> = {
+  available: {
+    label: "Available",
+    dot: "bg-green-500",
+    chip: "bg-green-50 text-green-700 ring-green-200",
+  },
+  not_configured: {
+    label: "Not configured",
+    dot: "bg-gray-400",
+    chip: "bg-gray-100 text-gray-600 ring-gray-200",
+  },
+  unavailable: {
+    label: "Unavailable",
+    dot: "bg-amber-500",
+    chip: "bg-amber-50 text-amber-800 ring-amber-200",
+  },
+};
+
 export default async function CommandCenterPage() {
-  const [approvals, motionData] = await Promise.all([
+  const [approvalLoad, motionData, operational] = await Promise.all([
     loadApprovals(),
     loadMotions(),
+    loadOperationalSnapshot(),
   ]);
+  const approvals = approvalLoad.items;
   const roster = AGENTS.filter((a) => a.category !== "Infrastructure");
+  const summary = operational.summary.data;
+  const signalsSource = sourceStatus(operational, "signals");
+  const outboxSource = sourceStatus(operational, "outbox");
+  const approvalsSource = sourceStatus(operational, "approvals");
+  const motionSource = sourceStatus(operational, "motion");
+  const experimentsSource = sourceStatus(operational, "experiments");
+  const learningSource = sourceStatus(operational, "learningProposals");
+  const healthSource = sourceStatus(
+    operational,
+    "componentHealth",
+    operational.health.data !== null,
+  );
+  const incidentsSource = sourceStatus(
+    operational,
+    "incidents",
+    operational.incidents.data !== null,
+  );
+  const healthOverall = isSourceAvailable(healthSource)
+    ? (operational.health.data?.overall ?? summary?.health.overall ?? null)
+    : null;
+  const healthComponents = isSourceAvailable(healthSource)
+    ? (operational.health.data?.total ?? summary?.health.components ?? null)
+    : null;
+  const openIncidents = isSourceAvailable(incidentsSource)
+    ? (operational.incidents.data?.open ?? summary?.incidents.open ?? null)
+    : null;
+  const criticalIncidents = isSourceAvailable(incidentsSource)
+    ? (summary?.incidents.criticalOpen ?? null)
+    : null;
+  const isPartial =
+    summary === null ||
+    summary.partial ||
+    operational.health.failed ||
+    operational.incidents.failed;
+  const controlPlaneLabel =
+    summary === null
+      ? "Control-plane summary unavailable"
+      : isPartial
+        ? "Partial control-plane data"
+        : "Live control-plane data";
+  const primaryMotions = summary?.motion.primaryMotions ?? [];
 
   return (
     <div className="space-y-4">
-      {/* ── Header + KPIs ────────────────────────────────────────────── */}
+      {/* ── Live tenant-scoped operational snapshot ─────────────────── */}
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold tracking-tight text-gray-900">
-              Insurance company · Command Center
+              Founder Command Center
             </h1>
             <p className="text-sm text-gray-500">
-              Motion:{" "}
-              <span className="font-medium text-gray-700">
-                {SCENARIO_KPIS.motion}
-              </span>
+              Tenant-scoped operating snapshot
+              {isSourceAvailable(motionSource) && (
+                <>
+                  {" · "}Motion:{" "}
+                  <span className="font-medium text-gray-700">
+                    {primaryMotions.length > 0
+                      ? primaryMotions.join(", ")
+                      : "No primary motion"}
+                  </span>
+                </>
+              )}
             </p>
           </div>
-          <div className="flex items-center gap-3 text-xs text-gray-500">
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-green-500" /> Live data
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-gray-300" /> Demo
-              scenario
-            </span>
-          </div>
+          <ControlPlaneState
+            label={controlPlaneLabel}
+            summaryUnavailable={summary === null}
+            partial={isPartial}
+          />
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-          <Kpi
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+          <OperationalKpi
             label="Signals today"
-            value={SCENARIO_KPIS.signalsToday}
-            scenario
+            value={
+              isSourceAvailable(signalsSource)
+                ? (summary?.signals.today ?? null)
+                : null
+            }
+            sourceStatus={signalsSource}
+            detail={
+              isSourceAvailable(signalsSource)
+                ? "Ingested since the current UTC day began"
+                : undefined
+            }
           />
-          <Kpi
-            label="Next-best-actions"
-            value={SCENARIO_KPIS.nbasPending}
-            scenario
+          <OperationalKpi
+            label="Pending outbox"
+            value={
+              isSourceAvailable(outboxSource)
+                ? (summary?.execution.pendingOutboxEvents ?? null)
+                : null
+            }
+            sourceStatus={outboxSource}
+            lowerBound={summary?.execution.pendingOutboxEventsIsLowerBound}
+            detail="Durable events awaiting delivery"
           />
-          <Kpi label="Approvals" value={approvals.length} live />
-          <Kpi
-            label="Warm accounts"
-            value={SCENARIO_KPIS.warmAccounts}
-            scenario
+          <OperationalKpi
+            label="Pending approvals"
+            value={
+              isSourceAvailable(approvalsSource)
+                ? (summary?.approvals.pending ?? null)
+                : null
+            }
+            sourceStatus={approvalsSource}
+            lowerBound={summary?.approvals.pendingIsLowerBound}
+            detail={
+              isSourceAvailable(approvalsSource) && summary
+                ? `${summary.approvals.approvedLastSevenDays} approved · ${summary.approvals.rejectedLastSevenDays} rejected / 7d`
+                : undefined
+            }
           />
-          <Kpi label="Pipeline" value={SCENARIO_KPIS.pipelineValue} scenario />
+          <OperationalKpi
+            label="Experiments"
+            value={
+              isSourceAvailable(experimentsSource)
+                ? (summary?.experiments.total ?? null)
+                : null
+            }
+            sourceStatus={experimentsSource}
+            detail={
+              isSourceAvailable(experimentsSource) && summary
+                ? `${summary.experiments.running} running · ${summary.experiments.paused} paused`
+                : undefined
+            }
+          />
+          <OperationalKpi
+            label="Learning proposals"
+            value={
+              isSourceAvailable(learningSource)
+                ? (summary?.learning.total ?? null)
+                : null
+            }
+            sourceStatus={learningSource}
+            detail={
+              isSourceAvailable(learningSource) && summary
+                ? `${summary.learning.awaitingEvidence} awaiting evidence · ${summary.learning.requiresApproval} need approval`
+                : undefined
+            }
+          />
+          <OperationalKpi
+            label="Components"
+            value={healthComponents}
+            sourceStatus={healthSource}
+            lowerBound={
+              operational.health.data?.totalIsLowerBound ??
+              summary?.health.componentsIsLowerBound
+            }
+            detail={
+              healthOverall
+                ? `Overall: ${healthOverall.replaceAll("_", " ")}`
+                : undefined
+            }
+          />
+          <OperationalKpi
+            label="Open incidents"
+            value={openIncidents}
+            sourceStatus={incidentsSource}
+            lowerBound={summary?.incidents.openIsLowerBound}
+            detail={
+              criticalIncidents === null
+                ? undefined
+                : `${criticalIncidents} critical open`
+            }
+          />
+        </div>
+
+        <div className="mt-4 border-t border-gray-100 pt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+              Data sources
+            </span>
+            {(Object.keys(sourceLabel) as ControlPlaneSource[]).map(
+              (source) => (
+                <SourceAvailability
+                  key={source}
+                  label={sourceLabel[source]}
+                  status={sourceStatus(
+                    operational,
+                    source,
+                    (source === "componentHealth" &&
+                      operational.health.data !== null) ||
+                      (source === "incidents" &&
+                        operational.incidents.data !== null),
+                  )}
+                />
+              ),
+            )}
+          </div>
+          {(operational.health.failed || operational.incidents.failed) && (
+            <p className="mt-2 text-xs text-amber-700">
+              {operational.health.failed &&
+                "Health detail endpoint unavailable"}
+              {operational.health.failed &&
+                operational.incidents.failed &&
+                "; "}
+              {operational.incidents.failed &&
+                "Incident detail endpoint unavailable"}
+              {
+                ". Summary counts above remain scoped to their reported sources."
+              }
+            </p>
+          )}
         </div>
       </div>
 
       {/* ── Main 3-column grid ───────────────────────────────────────── */}
       <div className="grid grid-cols-12 gap-4">
-        {/* LEFT — Agent roster / heartbeats */}
+        {/* LEFT — agent catalog */}
         <div className="col-span-12 lg:col-span-3">
-          <Panel title="Agent Roster" subtitle="heartbeats">
+          <Panel title="Agent Roster" subtitle="catalog">
             <ul className="space-y-1.5">
               {roster.map((a) => {
                 const meta = STATUS_META[a.status];
@@ -189,7 +452,7 @@ export default async function CommandCenterPage() {
 
         {/* CENTER — Signal feed + Next-best-action */}
         <div className="col-span-12 space-y-4 lg:col-span-6">
-          <Panel title="Signal → Action Feed" subtitle="live" scenario>
+          <Panel title="Signal → Action Feed" subtitle="Demo scenario" scenario>
             <ul className="space-y-2">
               {SIGNAL_FEED.map((f) => (
                 <li
@@ -218,7 +481,7 @@ export default async function CommandCenterPage() {
             </ul>
           </Panel>
 
-          <Panel title="Next-Best-Action" subtitle="cross-channel" scenario>
+          <Panel title="Next-Best-Action" subtitle="Demo scenario" scenario>
             <ul className="space-y-2">
               {NEXT_BEST_ACTIONS.map((n) => (
                 <li
@@ -250,28 +513,43 @@ export default async function CommandCenterPage() {
 
         {/* RIGHT — Approval queue (live) + warmth/pipeline */}
         <div className="col-span-12 space-y-4 lg:col-span-3">
-          <Panel title="Approval Queue" subtitle="live" live>
-            {approvals.length === 0 ? (
+          <Panel
+            title="Approval Queue"
+            subtitle={approvalLoad.failed ? "partial" : "live"}
+            live={!approvalLoad.failed}
+          >
+            {approvalLoad.failed && approvals.length === 0 ? (
+              <p className="text-sm text-amber-700">
+                Approval data is currently unavailable.
+              </p>
+            ) : approvals.length === 0 ? (
               <p className="text-sm text-gray-400">No pending items.</p>
             ) : (
-              <ul className="space-y-2">
-                {approvals.slice(0, 5).map((a) => (
-                  <li
-                    key={a.eventId}
-                    className="rounded-lg border border-gray-100 px-3 py-2"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
-                        {TYPE_LABEL[a.outputType] ?? a.outputType}
-                      </span>
-                      <StatusBadge variant="pending" label="Review" />
-                    </div>
-                    <p className="mt-1 line-clamp-2 text-sm text-gray-800">
-                      {a.payload?.title ?? "Untitled"}
-                    </p>
-                  </li>
-                ))}
-              </ul>
+              <>
+                {approvalLoad.failed && (
+                  <p className="mb-2 text-xs text-amber-700">
+                    Some approval sources are unavailable.
+                  </p>
+                )}
+                <ul className="space-y-2">
+                  {approvals.slice(0, 5).map((a) => (
+                    <li
+                      key={a.eventId}
+                      className="rounded-lg border border-gray-100 px-3 py-2"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">
+                          {TYPE_LABEL[a.outputType] ?? a.outputType}
+                        </span>
+                        <StatusBadge variant="pending" label="Review" />
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-sm text-gray-800">
+                        {a.payload?.title ?? "Untitled"}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </>
             )}
             <Link
               href="/approvals"
@@ -281,7 +559,7 @@ export default async function CommandCenterPage() {
             </Link>
           </Panel>
 
-          <Panel title="Warmth / Pipeline" subtitle="" scenario>
+          <Panel title="Warmth / Pipeline" subtitle="Demo scenario" scenario>
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-600">Warm accounts</span>
               <span className="font-semibold text-green-600">
@@ -314,8 +592,8 @@ export default async function CommandCenterPage() {
             </span>
           </h2>
           <span
-            className="h-2 w-2 rounded-full bg-green-500"
-            title="Live data"
+            className={`h-2 w-2 rounded-full ${motionData.failed ? "bg-amber-500" : "bg-green-500"}`}
+            title={motionData.failed ? "Motion data unavailable" : "Live data"}
           />
         </div>
         <p className="mb-4 text-xs text-gray-500">
@@ -324,7 +602,11 @@ export default async function CommandCenterPage() {
           become Primary; the rest are watched or paused.
         </p>
 
-        {motionData.motions.length === 0 ? (
+        {motionData.failed ? (
+          <p className="text-sm text-amber-700">
+            Motion data is currently unavailable.
+          </p>
+        ) : motionData.motions.length === 0 ? (
           <p className="text-sm text-gray-400">No motion scores yet.</p>
         ) : (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -396,7 +678,10 @@ export default async function CommandCenterPage() {
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="font-semibold uppercase tracking-wide text-gray-400">
-            Pipeline
+            Pipeline demo
+          </span>
+          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+            Demo scenario
           </span>
           {PIPELINE_STAGES.map((s, i) => (
             <span key={s.label} className="flex items-center gap-2">
@@ -412,7 +697,7 @@ export default async function CommandCenterPage() {
 
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-gray-100 pt-4 text-xs">
           <span className="font-semibold uppercase tracking-wide text-gray-400">
-            Channels
+            Demo channels
           </span>
           {CHANNELS.map((c) => {
             const m = CHANNEL_STATE_META[c.state];
@@ -431,10 +716,10 @@ export default async function CommandCenterPage() {
       </div>
 
       <p className="px-1 text-xs text-gray-400">
-        Approval Queue and agent roster are live. Signal feed,
-        next-best-actions, channel health and pipeline counts are a demo
-        scenario representing the view once the Mixmax/Nooks/LinkedIn/Reddit/SAD
-        adapters and dispatch layer are wired.
+        The operational snapshot, Approval Queue, and GTM Motions use
+        tenant-scoped API data when available. The agent catalog, signal feed,
+        next-best-actions, warmth, channel health, and pipeline strip are
+        explicitly labeled demo scenarios.
       </p>
     </div>
   );
@@ -442,28 +727,80 @@ export default async function CommandCenterPage() {
 
 /* ── Small presentational helpers ──────────────────────────────────── */
 
-function Kpi({
+function ControlPlaneState({
   label,
-  value,
-  live,
-  scenario,
+  summaryUnavailable,
+  partial,
 }: {
   label: string;
-  value: string | number;
-  live?: boolean;
-  scenario?: boolean;
+  summaryUnavailable: boolean;
+  partial: boolean;
 }) {
+  const meta = summaryUnavailable
+    ? { dot: "bg-amber-500", text: "text-amber-800", title: "Unavailable" }
+    : partial
+      ? { dot: "bg-amber-500", text: "text-amber-800", title: "Partial" }
+      : { dot: "bg-green-500", text: "text-green-800", title: "Live" };
+
+  return (
+    <span
+      className={`flex items-center gap-1.5 text-xs font-medium ${meta.text}`}
+      title={meta.title}
+    >
+      <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
+      {label}
+    </span>
+  );
+}
+
+function SourceAvailability({
+  label,
+  status,
+}: {
+  label: string;
+  status: ControlPlaneSourceStatus;
+}) {
+  const meta = sourceStatusMeta[status];
+  return (
+    <span
+      className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset ${meta.chip}`}
+      title={`${label}: ${meta.label}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+      {label}: {meta.label}
+    </span>
+  );
+}
+
+function OperationalKpi({
+  label,
+  value,
+  sourceStatus,
+  lowerBound = false,
+  detail,
+}: {
+  label: string;
+  value: number | null;
+  sourceStatus: ControlPlaneSourceStatus;
+  lowerBound?: boolean | undefined;
+  detail?: string | undefined;
+}) {
+  const meta = sourceStatusMeta[sourceStatus];
+  const visibleValue =
+    value === null ? "—" : `${lowerBound ? "≥" : ""}${value}`;
+
   return (
     <div className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-2">
       <div className="flex items-center gap-1.5">
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${live ? "bg-green-500" : "bg-gray-300"}`}
-        />
+        <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
         <p className="text-[10px] uppercase tracking-wide text-gray-400">
           {label}
         </p>
       </div>
-      <p className="mt-0.5 text-xl font-bold text-gray-900">{value}</p>
+      <p className="mt-0.5 text-xl font-bold text-gray-900">{visibleValue}</p>
+      <p className="mt-0.5 line-clamp-2 text-[10px] leading-4 text-gray-500">
+        {value === null ? meta.label : (detail ?? meta.label)}
+      </p>
     </div>
   );
 }

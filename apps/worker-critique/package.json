@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@growthos/core": "workspace:*",
     "@growthos/db": "workspace:*",
     "@growthos/llm-harness": "workspace:*",
     "nats": "^2.29.3",

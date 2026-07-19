@@ -43,18 +43,21 @@ The system is **multi-tenant**, **asynchronous**, and **auditable** — every st
 
 ## 2. Can It Run?
 
-**Yes.** The full stack builds and runs out of the box.
+The repository contains the application, workers, migrations, and Compose
+configuration required for the local stack. This document is a capability map,
+not a record that a Docker runtime has been started successfully in a particular
+environment.
 
-| Check | Result |
+| Area | Current implementation / operator action |
 |---|---|
-| TypeScript compilation (24 packages) | ✅ Zero errors |
-| Turbo build | ✅ Succeeds |
-| All imports resolve | ✅ No broken imports |
-| Docker Compose dev stack | ✅ All services start with healthchecks |
-| Database migrations | ✅ Run automatically on first boot |
-| Workers without OpenAI key | ✅ Deterministic fallbacks active |
+| Docker Compose development stack | Checked-in configuration; validate and start it with the [adaptive runtime runbook](runbooks/adaptive-gtm-local-runtime.md). |
+| Database migrations | The `migrate` Compose service runs pending migrations and the dev seed before dependent application services start; inspect its logs after startup. |
+| Durable worker path | The signal router, outbox publisher, content pipeline, critique, learning, attribution, and warmth workers have checked-in durable runtime entrypoints. |
+| LLM availability | Intel, content, blog, and critique workers have deterministic fallbacks when `OPENAI_API_KEY` is absent. |
 
-The only things that genuinely do not work without extra config are email delivery (Postal), real LLM output (OpenAI), workflow orchestration (Restate), and identity management (Zitadel) — all of which degrade gracefully with log warnings.
+Email delivery (Postal), OpenAI-backed generation, Restate orchestration, and
+Zitadel identity require external configuration. Missing configuration is a
+restricted/degraded mode, not evidence that those production integrations work.
 
 ---
 
@@ -64,15 +67,16 @@ The only things that genuinely do not work without extra config are email delive
 
 ```bash
 cp .env.example .env
+docker compose -f compose.dev.yaml config --quiet
 docker compose -f compose.dev.yaml up --build -d
 docker compose -f compose.dev.yaml ps   # verify all services healthy
 ```
 
 | Service | URL |
 |---|---|
-| Web (Next.js) | http://localhost:3000 |
-| API (Hono) | http://localhost:3001 |
-| API health | http://localhost:3001/health |
+| Web (Next.js) | http://localhost:3080 |
+| API (Hono) | http://localhost:3091 |
+| API health | http://localhost:3091/health |
 | NATS monitoring | http://localhost:8222 |
 | MinIO console | http://localhost:9001 |
 | ClickHouse | http://localhost:8123 |
@@ -92,6 +96,9 @@ pnpm dev
 
 - Web: http://localhost:3088
 - API: http://localhost:3001
+
+For a signal-to-approval operator exercise and control-plane/dead-letter
+checks, use the [adaptive runtime runbook](runbooks/adaptive-gtm-local-runtime.md).
 
 ### Running workers individually
 
@@ -165,7 +172,16 @@ growthos/
 │      │  Zod validation → SignalEventsRepository.ingest()            │
 │      │  Writes to signal_events (deduplicated by externalId)        │
 │      ▼                                                              │
-│  event_outbox row inserted atomically                               │
+│  Durable signal_events inbox                                        │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  SIGNAL ROUTER                                                      │
+│                                                                     │
+│  worker-signal-router claims leased signal_events rows             │
+│      │  Routes each signal and writes its command to event_outbox   │
+│      │  Marks the inbox row processed after the handoff is durable  │
 └────────────────────────────┬────────────────────────────────────────┘
                              │
                              ▼
@@ -173,11 +189,11 @@ growthos/
 │  OUTBOX PUBLISHER                                                   │
 │                                                                     │
 │  worker-outbox-publisher                                            │
-│      │  Polls event_outbox WHERE consumedAt IS NULL                 │
+│      │  Polls/listens for event_outbox WHERE consumedAt IS NULL     │
 │      │  Publishes to NATS JetStream subject                         │
 │      │  Sets consumedAt once published                              │
 └────────────────────────────┬────────────────────────────────────────┘
-                             │ NATS: intel_brief_requested.v1
+                             │ JetStream: t.<tenant>.intel_brief.requested.v1
                              ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  WORKER PIPELINE                                                    │
@@ -198,8 +214,7 @@ growthos/
 │  worker-critique            ◄────────────────────────────────────── │
 │      │  Loads current PlaybookVersion rubric                        │
 │      │  Evaluates draft → approve / revise / reject                 │
-│      │  Records approval_feedback row                               │
-│      │  Emits: learning_loop_completed.v1                           │
+│      │  Emits: critique.completed.v1                                │
 └────────────────────────────┬────────────────────────────────────────┘
                              │
                              ▼
@@ -207,11 +222,20 @@ growthos/
 │  FOUNDER REVIEW                                                     │
 │                                                                     │
 │  Web UI: /approvals                                                 │
-│      GET /v1/approvals  → lists unconsumed outbox events            │
+│      GET /v1/approvals  → lists pending artifact outbox events      │
 │      Founder reviews AI output                                      │
 │      POST /v1/approvals/decide                                      │
 │          → approve / edited_then_approved / rejected                │
-│          → writes to approval_feedback (feeds learning loop)        │
+│          → atomically writes approval_feedback + learning signal    │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  LEARNING CONTROL PLANE                                             │
+│                                                                     │
+│  worker-learning consumes critique.completed.v1 and learning.signal │
+│      │  Persists evidence-gated proposals                            │
+│      └── Re-checks evidence after proposal approval before promotion│
 └────────────────────────────┬────────────────────────────────────────┘
                              │
                              ▼
@@ -235,10 +259,10 @@ growthos/
 signal_events row created
     │
     ▼
-worker-signal-router
-    ├── Classifies signal type (market / competitor / product / customer)
-    ├── LLM quality grading (if OPENAI_API_KEY set)
-    └── Routes to appropriate downstream subject on NATS
+worker-signal-router (leased Postgres inbox poll)
+    ├── Applies the routing decision and preserves optional experiment lineage
+    ├── Writes an idempotent downstream command to event_outbox
+    └── Marks the signal processed only after that durable handoff
 ```
 
 ---
@@ -290,20 +314,23 @@ Smoke tests that validate infrastructure connectivity (Postgres, NATS, MinIO, et
 
 ## 7. Workers
 
-All workers are standalone Node.js processes. Each connects to Postgres and NATS at startup.
+Workers are standalone Node.js processes and use only the dependencies required
+for their role. Durable message consumers read from JetStream; the signal router
+uses the Postgres `signal_events` inbox, and downstream handoffs return through
+the transactional outbox.
 
 | Worker | Trigger | What it does | Status |
 |---|---|---|---|
-| `worker-outbox-publisher` | Cron poll | Reads `event_outbox`, publishes to NATS, marks consumed | ✅ Complete |
-| `worker-signal-router` | NATS: `signal.created.v1` | Classifies and grades incoming signals | ✅ Complete |
-| `worker-intel-director` | NATS: `intel_brief_requested.v1` | Generates intelligence briefs (LLM + fallback) | ✅ Complete |
-| `worker-content-strategist` | NATS: `intel_brief.v1` | Produces structured content briefs | ✅ Complete |
-| `worker-blog-draft` | NATS: `content_brief.v1` | Generates blog post drafts | ✅ Complete |
-| `worker-critique` | Outbox poll: `blog_draft.v1` | QA eval against playbook rubric | ✅ Complete |
-| `worker-workflow-callback` | NATS: Restate webhooks | Records workflow results | ✅ Complete |
-| `worker-learning` | NATS: `learning_loop_completed.v1` | Aggregates approval feedback | ⚠️ Stub |
-| `worker-warmth` | NATS: approval events | Founder warmth/receptiveness scoring | ⚠️ Stub |
-| `worker-attribution` | — | Sales-motion attribution | ❌ Not implemented |
+| `worker-outbox-publisher` | Postgres outbox poll + LISTEN/NOTIFY | Sole runtime publisher to JetStream; marks delivered events and materializes sanitized dead-letter incidents | ✅ Durable path |
+| `worker-signal-router` | Leased Postgres `signal_events` inbox poll | Routes signals and writes idempotent downstream commands to the outbox | ✅ Durable path |
+| `worker-intel-director` | JetStream: `t.*.intel_brief.requested.v1` | Generates intelligence briefs (LLM + fallback) and writes the result to the outbox | ✅ Durable path |
+| `worker-content-strategist` | JetStream: `t.*.intel_brief.v1` | Produces structured content briefs through the outbox | ✅ Durable path |
+| `worker-blog-draft` | JetStream: `t.*.content_brief.v1` | Generates blog post drafts through the outbox | ✅ Durable path |
+| `worker-critique` | JetStream: `t.*.blog_draft.v1` | Evaluates a draft against its playbook and writes `critique.completed.v1` to the outbox | ✅ Durable path |
+| `worker-workflow-callback` | JetStream: tenant provisioning requests | Executes/verifies provisioning and writes lifecycle updates to the outbox | ✅ Complete |
+| `worker-learning` | JetStream: `t.*.learning.signal.v1`, `t.*.critique.completed.v1`, `t.*.learning.proposal.approved.v1` | Persists feedback/critique proposals, applies evidence gates, and re-checks evidence after proposal approval | ✅ Evidence-governed durable path |
+| `worker-warmth` | JetStream: `t.*.warmth.signal.v1` | Scores tenant-scoped engagement and emits an outreach gate | ✅ Durable deterministic path |
+| `worker-attribution` | JetStream: `t.*.attribution.signal.v1` | Computes tenant-scoped multi-touch rollups | ✅ Durable deterministic path |
 
 **Graceful degradation**: Workers that use LLM features (`intel-director`, `content-strategist`, `blog-draft`) automatically fall back to deterministic output when `OPENAI_API_KEY` is not set.
 
@@ -332,20 +359,28 @@ All workers are standalone Node.js processes. Each connects to Postgres and NATS
 
 Schema: `packages/db/src/schema.ts`  
 ORM: Drizzle  
-Engine: PostgreSQL with RLS-ready `tenant_id` columns
+Engine: PostgreSQL. Adaptive control-plane tables enforce tenant RLS; production
+validation must also confirm tenant context and RLS coverage for every service
+role and tenant-scoped table.
 
 | Table | Purpose | Key columns |
 |---|---|---|
 | `motion_scores` | Scored GTM motions per tenant | `tenantId`, `motionType`, `score`, `scoredAt` |
 | `motion_stack` | Current primary/secondary/observe/deactivated motions | `tenantId`, `primary`, `secondary`, `observe`, `deactivated` |
 | `signal_events` | High-volume signal write path | `tenantId`, `externalId` (dedup key), `signalType`, `processedAt` |
-| `approval_feedback` | Founder decisions for learning loop | `tenantId`, `outputId`, `decision`, `editedContent` |
-| `event_outbox` | Transactional outbox for event publishing | `subject`, `payload`, `consumedAt` |
-| `workflow_runs` | Restate workflow state tracking | `tenantId`, `workflowId`, `status`, `result` |
+| `approval_feedback` | Founder decisions for learning loop | `tenantId`, `issueId`, `outputType`, `action`, `learnOptIn` |
+| `event_outbox` | Transactional outbox for event publishing | `tenantId`, `eventType`, `idempotencyKey`, `payload`, `consumedAt` |
+| `workflow_runs` | Restate workflow state tracking | `tenantId`, `workflowId`, `state`, `failureCode` |
 | `playbook_versions` | Versioned QA rubrics for critique worker | `tenantId`, `version`, `rubric`, `activeAt` |
 | `tenant_settings` | Per-tenant UI preferences and config | `tenantId`, `settings` (JSONB) |
+| `experiments` | Bounded, versioned GTM experiments | `tenantId`, `experimentKey`, `status`, `metricName`, `minSampleSize` |
+| `experiment_assignments` | Sticky tenant/entity variant assignments | `tenantId`, `experimentId`, `entityType`, `entityId`, `variant` |
+| `experiment_observations` | Idempotent outcome and attribution evidence | `tenantId`, `experimentId`, `assignmentId`, `metricName`, `attributionConfidence` |
+| `learning_proposals` | Evidence-gated learning lifecycle | `tenantId`, `proposalKey`, `experimentId`, `status`, `evaluationSnapshot` |
+| `component_health` | Bounded recovery decisions | `tenantId`, `componentId`, `state`, `action`, `allowExternalActions` |
+| `incidents` | Sanitized operational incidents | `tenantId`, `incidentKey`, `severity`, `status`, `openedAt` |
 
-**Migrations**: `packages/db/src/migrations/`  
+**Migrations**: `packages/db/drizzle/`
 **Seed**: `packages/db/src/seed.ts` — runs automatically in dev on first boot
 
 ---
@@ -370,22 +405,26 @@ Engine: PostgreSQL with RLS-ready `tenant_id` columns
 
 ### Tenant isolation
 
-- Every database table has a `tenant_id` column
-- All API routes require `X-Tenant-Id` header
+- Tenant-scoped database tables use a `tenant_id` column
+- Tenant-scoped API routes require an `X-Tenant-Id` header
 - NATS subjects are scoped: `tenantScopedSubject(tenantId, eventType)`
-- Row-Level Security patterns in place (RLS enforcement configurable)
+- Adaptive control-plane tables have forced RLS policies; production must verify
+  session tenant context and RLS coverage across the rest of the data model
 
 ---
 
 ## 11. Event Outbox Pattern
 
-All state transitions write to `event_outbox` atomically in the same Postgres transaction as the business record. This guarantees no event is lost even if the process crashes before publishing.
+Business operations that emit an event write `event_outbox` atomically in the
+same Postgres transaction as the business record. This guarantees that an
+emitted event is not lost if the process crashes before publishing.
 
 ```
 Business operation
     │
     ├── INSERT business record
-    └── INSERT event_outbox { subject, payload, consumedAt: null }
+    └── INSERT event_outbox { tenantId, eventType, idempotencyKey,
+                              payload, consumedAt: null }
         (same transaction — atomically consistent)
 
 worker-outbox-publisher (separate process):
@@ -434,29 +473,31 @@ Workers consume events via **durable NATS subscriptions** — if a worker crashe
 
 ### Dev stack (`compose.dev.yaml`)
 
-| Service | Port(s) | Purpose |
+| Service | Host port(s) → container port(s) | Purpose |
 |---|---|---|
-| `postgres` | 5432 | Primary database |
+| `postgres` | 5442 → 5432 | Primary database |
 | `nats` | 4222, 8222 | JetStream message broker |
 | `jetstream-init` | — | One-shot: creates NATS streams |
-| `clickhouse` | 8123, 9000 | LLM call logging |
+| `clickhouse` | 8123 | LLM call logging |
 | `minio` | 9000, 9001 | Object storage |
 | `openbao` | 8200 | Secrets backend (Vault-compatible) |
-| `gitea` | 3088 | Git workspace (dev) |
+| `gitea` | 3088 → 3000 | Git workspace (dev) |
 | `migrate` | — | One-shot: runs DB migrations on first boot |
-| `api` | 3001 | Hono API |
-| `web` | 3000 | Next.js web app |
+| `api` | 3091 → 3001 | Hono API |
+| `web` | 3080 → 3000 | Next.js web app |
 
-All services have healthchecks. `api` and `web` wait on `migrate` completing before starting.
+The infrastructure and API expose health checks where configured. `api`, `web`,
+and workers wait on the migration/NATS dependencies declared in Compose; use the
+operator runbook to confirm actual startup and health in an environment.
 
 ### Production
 
 | Component | Location | Status |
 |---|---|---|
-| K8s manifests (Kustomize) | `deploy/gitops/k8s/base/` | ✅ Complete |
-| ArgoCD Application | `deploy/gitops/argo-cd/application.yaml` | ✅ Complete |
-| Weekly digest CronJob | `deploy/gitops/k8s/base/cronjob-weekly-digest.yaml` | ✅ Complete |
-| ExternalSecrets integration | K8s manifests | ✅ Complete |
+| K8s manifests (Kustomize) | `deploy/gitops/k8s/base/` | Checked in; environment-specific hardening and deployment validation remain |
+| ArgoCD Application | `deploy/gitops/argo-cd/application.yaml` | Checked in; cluster/repository configuration remains |
+| Weekly digest CronJob | `deploy/gitops/k8s/base/cronjob-weekly-digest.yaml` | Checked in; requires production sender/secrets configuration |
+| ExternalSecrets integration | K8s manifests | Manifests present; secret-store provisioning remains |
 | Pulumi IaC | `deploy/pulumi/index.ts` | ❌ Stub only |
 
 ### Dockerfiles
@@ -470,31 +511,38 @@ Each app has its own Dockerfile under `docker/`:
 
 ## 14. Implementation Status
 
-### Complete — production-ready code
+### Implemented code paths
+
+These are implemented code paths, not a certification that external services,
+production secrets, deployment infrastructure, or tenant-specific calibration
+have been validated in a production environment.
 
 - `apps/api` — all 9 route groups, auth middleware, Zod validation, error handling
 - `apps/web` — all 9 pages, session auth, full UI flows
-- `packages/db` — 8 tables, Drizzle schema, migrations, seed, all repositories
+- `packages/db` — Drizzle schema, migrations, seed, base repositories, and durable adaptive control-plane repositories
 - `packages/core` — motion scoring algorithm, handoff contracts, Restate client, tenant provisioning
 - `packages/llm-harness` — OpenAI runner, ClickHouse logging, signal grader
 - `packages/adapter` — Paperclip HTTP client (companies, agents, issues, checkout/release/wakeup)
 - `packages/observability` — OTel SDK, HTTP + NATS middleware, structured logger
-- `worker-signal-router` — signal classification + LLM quality grading
+- `worker-signal-router` — leased `signal_events` inbox processing with idempotent outbox handoffs
 - `worker-intel-director` — brief generation (LLM + deterministic fallback)
 - `worker-content-strategist` — structured content brief from intel
 - `worker-blog-draft` — blog draft generation
-- `worker-critique` — QA eval against versioned playbooks
-- `worker-outbox-publisher` — event publishing loop (critical infrastructure)
-- `worker-workflow-callback` — Restate webhook handling
-- K8s + ArgoCD deployment manifests
+- `worker-critique` — durable JetStream quality gate against versioned playbooks
+- `worker-learning` — durable feedback/critique/proposal consumers with persisted evidence gates and approval re-checks
+- `worker-warmth` and `worker-attribution` — durable deterministic signal paths
+- `worker-outbox-publisher` — outbox publisher, bounded dispatch lifecycle, and dead-letter incident materialization
+- `worker-workflow-callback` — durable tenant-provisioning lifecycle consumer
+- K8s + ArgoCD deployment manifests — checked-in artifacts, not a deployed-infrastructure certification
 
 ### Stubs — functional but minimal
 
 | Area | Gap |
 |---|---|
 | `packages/llm-harness/src/prompt-template.ts` | Prompt templates are minimal system messages; functional but produce generic output. Need a real prompting pass. |
-| `worker-learning` | Aggregates feedback, but no ML pipeline or model training integration |
-| `worker-warmth` | Returns dummy scores; no real warmth/receptiveness modeling |
+| Adaptive learning calibration | Durable proposal/promotion mechanics exist, but each tenant still needs calibrated outcome definitions, attribution thresholds, minimum samples, and guardrail tolerances. |
+| `worker-warmth` | Deterministic scoring is durable, but needs learned/calibrated weights and cumulative-touch persistence for advanced use cases |
+| `worker-attribution` | Durable multi-touch rollups exist, but cohort-level calibration and warehouse/ClickHouse reporting remain to be completed. |
 | `packages/design-system` | No actual UI components; empty exports |
 | `packages/test-utils` | Only exports `testTenantId` constant |
 | `deploy/pulumi/index.ts` | `export const environment = pulumi.output("stub")` — no real infra |
@@ -503,7 +551,6 @@ Each app has its own Dockerfile under `docker/`:
 
 | Area | Notes |
 |---|---|
-| `worker-attribution` | `index.ts` only, no logic |
 | `packages/paperclip-client` | Directory exists but both files are empty; not imported anywhere |
 | Restate workflow definitions | Config present, no actual workflow implementations |
 
@@ -523,9 +570,10 @@ Before deploying to production:
 - [ ] Configure `VAULT_ADDR` + `VAULT_TOKEN` — for secrets backend
 - [ ] Complete `deploy/pulumi/index.ts` — or provision cloud infrastructure manually
 - [ ] Replace stub prompt templates in `packages/llm-harness/src/prompt-template.ts` with production prompts
-- [ ] Implement `worker-learning` if model feedback loop is required
-- [ ] Implement `worker-attribution` if sales attribution tracking is required
-- [ ] Enable and test Row-Level Security enforcement in Postgres
+- [ ] Validate the full Compose signal → experiment → outcome → approval → control-plane path with the [adaptive runtime runbook](runbooks/adaptive-gtm-local-runtime.md)
+- [ ] Calibrate per-tenant learning policy: metric definitions, attribution confidence, minimum samples, lift, and guardrail tolerances
+- [ ] Calibrate the attribution model and add ClickHouse rollups if sales attribution needs cohort-level reporting
+- [ ] Verify forced Row-Level Security policies and session tenant context for every production service role and tenant-scoped table
 - [ ] Set up monitoring dashboards (OTel collector, ClickHouse, NATS monitoring at `:8222`)
 - [ ] Configure ArgoCD to point at your cluster + git repo
 

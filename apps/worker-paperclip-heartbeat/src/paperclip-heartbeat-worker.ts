@@ -17,6 +17,8 @@ export interface WorkerLogger {
  * GrowthOS-native agent and is ready to be executed by a domain worker.
  */
 export interface DispatchContext {
+  /** GrowthOS tenant that explicitly owns this Paperclip company. */
+  tenantId: string;
   companyId: string;
   agentId: string;
   issueId: string;
@@ -26,12 +28,9 @@ export interface DispatchContext {
 }
 
 /**
- * Routes a checked-out issue to the GrowthOS execution path. The real
- * implementation should map the issue to a motion / domain worker (e.g. publish
- * a NATS event on `t.<tenant>.paperclip.work.ready` or enqueue via the outbox),
- * then report completion back to Paperclip.
- *
- * The default dispatcher just logs — this is the seam left for the domain wiring.
+ * Routes a checked-out issue to the GrowthOS execution path. Production wiring
+ * persists a tenant-scoped `paperclip.work.ready.v1` outbox event, which the
+ * outbox publisher forwards to NATS.
  */
 export type Dispatcher = (ctx: DispatchContext) => Promise<void>;
 
@@ -53,19 +52,27 @@ export class PaperclipHeartbeatWorker {
   constructor(private readonly deps: PaperclipHeartbeatWorkerDeps) {
     this.dispatch =
       deps.dispatch ??
-      (async (ctx) => {
-        this.deps.logger.info(
-          ctx,
-          "[dispatch stub] issue ready for GrowthOS execution — wire domain routing here",
+      (async () => {
+        // Never claim work and silently drop it. The executable bootstrap
+        // wires OutboxPaperclipWorkDispatcher; direct construction without it
+        // fails closed and requeues only an issue this worker actually claimed.
+        throw new Error(
+          "Paperclip heartbeat dispatcher is not configured; refusing to drop checked-out work.",
         );
       });
     this.newRunId = deps.newRunId ?? (() => randomUUID());
   }
 
   start(): void {
-    const { pollIntervalMs, companyIds, dryRun } = this.deps.config;
+    const { pollIntervalMs, companyIds, companyTenantMap, dryRun } =
+      this.deps.config;
     this.deps.logger.info(
-      { companyIds, pollIntervalMs, dryRun },
+      {
+        companyIds,
+        mappedCompanyIds: Object.keys(companyTenantMap),
+        pollIntervalMs,
+        dryRun,
+      },
       "paperclip-heartbeat worker starting",
     );
     // Fire once immediately, then on the interval.
@@ -86,7 +93,19 @@ export class PaperclipHeartbeatWorker {
     this.ticking = true;
     try {
       for (const companyId of this.deps.config.companyIds) {
-        await this.tickCompany(companyId);
+        try {
+          await this.tickCompany(companyId);
+        } catch (err) {
+          // One unavailable Paperclip company must not prevent independent
+          // tenants from receiving their next heartbeat.
+          this.deps.logger.error(
+            {
+              companyId,
+              err: err instanceof Error ? err.message : String(err),
+            },
+            "paperclip-heartbeat company poll failed",
+          );
+        }
       }
     } catch (err) {
       this.deps.logger.error(
@@ -99,6 +118,18 @@ export class PaperclipHeartbeatWorker {
   }
 
   private async tickCompany(companyId: string): Promise<void> {
+    const tenantId = this.deps.config.companyTenantMap[companyId];
+    if (!tenantId && !this.deps.config.dryRun) {
+      // configFromEnv rejects this at startup. Retain a runtime guard for
+      // programmatic construction so a bad deployment cannot claim work for
+      // an unknown tenant.
+      this.deps.logger.error(
+        { companyId },
+        "Paperclip company has no GrowthOS tenant mapping; refusing live dispatch",
+      );
+      return;
+    }
+
     const issues = await this.deps.client.listCompanyIssues(companyId);
     const runnable = issues.filter((issue) => this.isRunnable(issue));
     if (runnable.length === 0) return;
@@ -109,7 +140,21 @@ export class PaperclipHeartbeatWorker {
     );
 
     for (const issue of runnable) {
-      await this.processIssue(companyId, issue);
+      // The list endpoint is company-scoped, but reject a malformed/cross-
+      // company row before it can cross a tenant boundary.
+      if (issue.companyId && issue.companyId !== companyId) {
+        this.deps.logger.error(
+          {
+            companyId,
+            issueId: issue.id,
+            issueCompanyId: issue.companyId,
+          },
+          "Paperclip returned issue with mismatched company; refusing dispatch",
+        );
+        continue;
+      }
+
+      await this.processIssue(companyId, tenantId, issue);
     }
   }
 
@@ -123,6 +168,7 @@ export class PaperclipHeartbeatWorker {
 
   private async processIssue(
     companyId: string,
+    tenantId: string | undefined,
     issue: PaperclipIssueListItem,
   ): Promise<void> {
     const agentId = issue.assigneeAgentId as string;
@@ -144,21 +190,62 @@ export class PaperclipHeartbeatWorker {
       return;
     }
 
+    if (!tenantId) {
+      // Defensive backstop for callers that construct a config without going
+      // through configFromEnv. Crucially, this happens before checkout.
+      this.deps.logger.error(
+        base,
+        "Paperclip issue has no resolved GrowthOS tenant; refusing checkout",
+      );
+      return;
+    }
+
+    const context: DispatchContext = { ...base, tenantId };
+    let checkedOut = false;
+
     try {
       // Claim the issue in Paperclip (status -> in_progress, locked to runId).
       await this.deps.client.checkoutIssue({
         issueId: issue.id,
         agentId,
+        // Prevent a stale list response from claiming an issue whose status
+        // changed to something this worker is not allowed to execute.
+        expectedStatuses: this.deps.config.runnableStatuses,
         runId,
       });
-      await this.dispatch(base);
+      checkedOut = true;
+
+      await this.dispatch(context);
+      this.deps.logger.info(context, "Paperclip issue dispatched to GrowthOS");
     } catch (err) {
       this.deps.logger.error(
-        { ...base, err: err instanceof Error ? err.message : String(err) },
-        "failed to check out / dispatch issue — releasing",
+        { ...context, err: err instanceof Error ? err.message : String(err) },
+        checkedOut
+          ? "failed to dispatch checked-out Paperclip issue"
+          : "failed to check out Paperclip issue",
       );
-      // Best-effort release so the issue is not left locked to a dead run.
-      await this.deps.client.releaseIssue(issue.id).catch(() => undefined);
+
+      // Do not requeue after a failed checkout: that could mutate work claimed
+      // by another worker. Once this worker has claimed it, a tenant-safe
+      // requeue is the best-effort recovery path after an outbox fault. Unlike
+      // Paperclip's generic release endpoint, requeue keeps the assignee so the
+      // next poll can retry the issue.
+      if (!checkedOut) return;
+
+      try {
+        await this.deps.client.requeueIssue(issue.id);
+      } catch (requeueErr) {
+        this.deps.logger.error(
+          {
+            ...context,
+            err:
+              requeueErr instanceof Error
+                ? requeueErr.message
+                : String(requeueErr),
+          },
+          "failed to requeue Paperclip issue after dispatch failure",
+        );
+      }
     }
   }
 }

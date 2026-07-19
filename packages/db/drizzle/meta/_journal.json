@@ -22,6 +22,34 @@
       "when": 1777466997142,
       "tag": "0002_nostalgic_hellfire_club",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784459489887,
+      "tag": "0003_adaptive_control_plane",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784460197693,
+      "tag": "0004_external_action_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784460868990,
+      "tag": "0005_signal_processing_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784463055462,
+      "tag": "0006_eager_the_phantom",
+      "breakpoints": true
     }
   ]
 }

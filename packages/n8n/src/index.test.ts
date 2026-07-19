@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   N8nDispatchClient,
   buildCanonicalN8nSignalEnvelope,
+  extractN8nDispatchReceiptMetadata,
   n8nDispatchRequestSchema,
+  n8nDispatchResultCallbackSchema,
   n8nSignalEnvelopeSchema,
   n8nTypedDispatchRequestSchema,
   signN8nPayload,
@@ -158,6 +160,36 @@ describe("n8n contracts", () => {
       parentId: "t1_comment_123",
     });
   });
+
+  it("validates terminal n8n result callbacks", () => {
+    const callback = n8nDispatchResultCallbackSchema.parse({
+      tenantId: "00000000-0000-4000-8000-000000000001",
+      actionId: "email-welcome-1",
+      idempotencyKey: "email-welcome-1",
+      callbackId: "n8n-execution-1:completed",
+      status: "completed",
+      executionId: "n8n-execution-1",
+      outcome: { delivered: true },
+    });
+
+    expect(callback.outcome).toEqual({ delivered: true });
+  });
+
+  it("extracts common correlation IDs from n8n dispatch receipts", () => {
+    expect(
+      extractN8nDispatchReceiptMetadata({
+        data: {
+          workflow_id: "workflow-1",
+          execution_id: "execution-1",
+          message_id: "provider-1",
+        },
+      }),
+    ).toEqual({
+      workflowId: "workflow-1",
+      executionId: "execution-1",
+      providerReference: "provider-1",
+    });
+  });
 });
 
 describe("verifyN8nSignature", () => {
@@ -206,6 +238,31 @@ describe("N8nDispatchClient", () => {
         }),
       }),
     );
+  });
+
+  it("signs outbound dispatches when a shared secret is configured", async () => {
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ accepted: true }), { status: 202 }),
+    );
+    const client = new N8nDispatchClient(
+      {
+        webhookUrl: "https://n8n.example/webhook/dispatch",
+        sharedSecret: "n8n-shared-secret",
+      },
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    await client.dispatch({
+      ...dispatchRequest,
+      callback: { url: "https://api.example/v1/n8n/dispatch-results" },
+    });
+
+    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
+    const rawBody = String(init.body);
+    expect(init.headers).toMatchObject({
+      "x-growthos-signature": signN8nPayload(rawBody, "n8n-shared-secret"),
+    });
   });
 
   it("returns non-retryable failures for 4xx responses", async () => {

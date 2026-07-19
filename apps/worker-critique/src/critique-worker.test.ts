@@ -271,7 +271,7 @@ describe("evaluateRubric", () => {
 // ---------------------------------------------------------------------------
 
 describe("CritiqueWorker — heuristic path (no playbookRepository)", () => {
-  it("emits critique.completed.v1 to outbox and NATS", async () => {
+  it("emits critique.completed.v1 to the durable outbox", async () => {
     const publishFn = vi.fn(async () => undefined);
     const { worker, outboxRepository } = makeWorker(publishFn);
 
@@ -281,10 +281,7 @@ describe("CritiqueWorker — heuristic path (no playbookRepository)", () => {
     });
 
     expect(result.verdict).toBe("approve");
-    expect(publishFn).toHaveBeenCalledWith(
-      `t.${TENANT_ID}.critique.completed.v1`,
-      expect.objectContaining({ critique_id: "crit-1", verdict: "approve" }),
-    );
+    expect(publishFn).not.toHaveBeenCalled();
     const events = await outboxRepository.listUnconsumed(TENANT_ID, 10);
     expect(events).toHaveLength(1);
     expect(events[0]?.eventType).toBe("critique.completed.v1");
@@ -704,7 +701,7 @@ describe("CritiqueWorker — LLM path", () => {
       [CRITIQUE_TEMPLATE_ID]: VALID_LLM_VERDICT_JSON,
     });
     const outbox = new InMemoryOutboxRepository();
-    const { publisher, events } = makePublisher();
+    const { publisher, events: publishedEvents } = makePublisher();
 
     const worker = new CritiqueWorker({
       outboxRepository: outbox,
@@ -714,9 +711,11 @@ describe("CritiqueWorker — LLM path", () => {
 
     await worker.critique({ ...baseRequest, candidateOutput: richOutput });
 
+    const events = await outbox.listUnconsumed(TENANT_ID, 10);
     expect(events).toHaveLength(1);
-    expect(events[0]?.[1].verdict).toBe("approve");
-    expect(events[0]?.[1].confidence_score).toBe(0.9);
+    expect(events[0]?.payload.verdict).toBe("approve");
+    expect(events[0]?.payload.confidence_score).toBe(0.9);
+    expect(publishedEvents).toHaveLength(0);
   });
 });
 

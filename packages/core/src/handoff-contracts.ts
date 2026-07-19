@@ -95,6 +95,12 @@ export type BriefOpportunityRef = z.infer<typeof briefOpportunityRefSchema>;
 export const intelBriefV1Schema = z.object({
   schema_version: z.literal("intel_brief.v1"),
   tenant_id: z.string().uuid(),
+  /**
+   * Optional canary lineage. It is supplied by the durable request source,
+   * not invented by a model, and is carried through downstream artifacts so
+   * critique/outcome evidence can be joined to the exact experiment.
+   */
+  experiment_id: z.string().uuid().optional(),
   brief_id: z.string().uuid(),
   generated_at: datetimeSchema,
   period: z.object({
@@ -128,6 +134,7 @@ export type OpportunityEvidence = z.infer<typeof opportunityEvidenceSchema>;
 export const contentOpportunityV1Schema = z.object({
   schema_version: z.literal("content_opportunity.v1"),
   tenant_id: z.string().uuid(),
+  experiment_id: z.string().uuid().optional(),
   opportunity_id: z.string().uuid(),
   source_brief_id: z.string().uuid(),
   title: z.string().min(1),
@@ -169,6 +176,7 @@ export const internalLinkSuggestionSchema = z.object({
 export const contentBriefV1Schema = z.object({
   schema_version: z.literal("content_brief.v1"),
   tenant_id: z.string().uuid(),
+  experiment_id: z.string().uuid().optional(),
   brief_id: z.string().uuid(),
   opportunity_id: z.string().uuid(),
   generated_at: datetimeSchema,
@@ -218,6 +226,7 @@ export const draftQualityIndicatorsSchema = z.object({
 export const blogDraftV1Schema = z.object({
   schema_version: z.literal("blog_draft.v1"),
   tenant_id: z.string().uuid(),
+  experiment_id: z.string().uuid().optional(),
   draft_id: z.string().uuid(),
   brief_id: z.string().uuid(),
   generated_at: datetimeSchema,

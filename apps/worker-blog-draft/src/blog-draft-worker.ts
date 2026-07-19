@@ -28,7 +28,6 @@ import {
   contentBriefV1Schema,
 } from "@growthos/core";
 import type { OutboxRepository } from "@growthos/db";
-import { tenantScopedSubject } from "@growthos/db";
 import {
   BLOG_DRAFT_GENERATE_PROMPT,
   type LlmCallRunner,
@@ -108,6 +107,7 @@ export const generateBlogDraft = (brief: ContentBriefV1): BlogDraftV1 => {
   const draft: BlogDraftV1 = {
     schema_version: "blog_draft.v1",
     tenant_id: brief.tenant_id,
+    ...(brief.experiment_id ? { experiment_id: brief.experiment_id } : {}),
     draft_id: crypto.randomUUID(),
     brief_id: brief.brief_id,
     generated_at: new Date().toISOString(),
@@ -206,6 +206,7 @@ export const generateLlmBlogDraft = async (
   const draft: BlogDraftV1 = {
     schema_version: "blog_draft.v1",
     tenant_id: brief.tenant_id,
+    ...(brief.experiment_id ? { experiment_id: brief.experiment_id } : {}),
     draft_id: crypto.randomUUID(),
     brief_id: brief.brief_id,
     generated_at: new Date().toISOString(),
@@ -237,7 +238,8 @@ export const generateLlmBlogDraft = async (
 
 export interface BlogDraftWorkerDependencies {
   outboxRepository: OutboxRepository;
-  eventPublisher: EventPublisher;
+  /** Delivery is outbox-only; retained as an optional compatibility seam. */
+  eventPublisher?: EventPublisher;
   /**
    * Optional LLM runner.  When present, `processBrief()` calls
    * `generateLlmBlogDraft()` before falling back to the deterministic
@@ -266,10 +268,6 @@ export class BlogDraftWorker {
     const command = createBlogDraftOutboxCommand(draft, draft.iteration);
 
     await this.deps.outboxRepository.enqueue(command);
-    await this.deps.eventPublisher.publish(
-      tenantScopedSubject(brief.tenant_id, "blog_draft.v1"),
-      command.payload,
-    );
 
     return draft;
   }

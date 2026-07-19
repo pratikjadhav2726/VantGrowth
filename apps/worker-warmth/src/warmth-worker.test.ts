@@ -1,7 +1,7 @@
 import { InMemoryOutboxRepository } from "@growthos/db";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { parseWarmthSignalEvent } from "./contracts.js";
 import {
-  type EventPublisher,
   WarmthWorker,
   computeWarmthScore,
   evaluateWarmthSignal,
@@ -88,15 +88,51 @@ describe("evaluateWarmthSignal", () => {
   });
 });
 
+describe("parseWarmthSignalEvent", () => {
+  const eventPayload = {
+    tenant_id: tenantId,
+    warmth_id: "warm-wire-1",
+    dedupe_key: "warm-wire-1",
+    source: "warmth_builder",
+    subject_id: "subject-wire-1",
+    cold_override: false,
+    touches: [
+      {
+        touch_type: "reply" as const,
+        occurred_at: "2026-04-27T00:00:00.000Z",
+      },
+    ],
+  };
+
+  it("normalizes the durable snake_case event contract", () => {
+    const signal = parseWarmthSignalEvent(eventPayload, tenantId);
+
+    expect(signal).toMatchObject({
+      tenantId,
+      warmthId: "warm-wire-1",
+      dedupeKey: "warm-wire-1",
+      subjectId: "subject-wire-1",
+    });
+    expect(signal.touches[0]?.occurredAt).toEqual(
+      new Date("2026-04-27T00:00:00.000Z"),
+    );
+  });
+
+  it("rejects a payload that claims a different tenant", () => {
+    expect(() =>
+      parseWarmthSignalEvent(
+        eventPayload,
+        "00000000-0000-4000-8000-000000000002",
+      ),
+    ).toThrow("does not match");
+  });
+});
+
 describe("WarmthWorker", () => {
-  it("emits warmth evaluation event into outbox and tenant subject", async () => {
+  it("emits warmth evaluation event into the durable outbox", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
-    const eventPublisher: EventPublisher = {
-      publish: vi.fn(async () => undefined),
-    };
     const worker = new WarmthWorker({
       outboxRepository,
-      eventPublisher,
       now: () => new Date("2026-04-28T00:00:00.000Z"),
     });
 
@@ -116,24 +152,20 @@ describe("WarmthWorker", () => {
     });
 
     expect(result.disposition).toBe("eligible");
-    expect(eventPublisher.publish).toHaveBeenCalledWith(
-      `t.${tenantId}.warmth.evaluated.v1`,
-      expect.objectContaining({
-        warmth_id: "warm-1",
-        disposition: "eligible",
-      }),
-    );
-
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
     expect(events).toHaveLength(1);
     expect(events[0]?.eventType).toBe("warmth.evaluated.v1");
+    expect(events[0]?.payload).toMatchObject({
+      tenant_id: tenantId,
+      warmth_id: "warm-1",
+      disposition: "eligible",
+    });
   });
 
   it("keeps outbox idempotent for duplicate warmth signals", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
     const worker = new WarmthWorker({
       outboxRepository,
-      eventPublisher: { publish: vi.fn(async () => undefined) },
       now: () => new Date("2026-04-28T00:00:00.000Z"),
     });
 

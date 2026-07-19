@@ -1,6 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { n8nTypedDispatchRequestSchema } from "./channel-contracts.js";
+import {
+  n8nDispatchCallbackSchema,
+  n8nTypedDispatchRequestSchema,
+} from "./channel-contracts.js";
 
 export * from "./channel-contracts.js";
 
@@ -40,6 +43,7 @@ export const n8nDispatchRequestSchema = z.object({
   approvedBy: z.string().min(1).max(255),
   idempotencyKey: z.string().min(1).max(255),
   payload: z.record(z.unknown()).default({}),
+  callback: n8nDispatchCallbackSchema.optional(),
 });
 
 export type N8nDispatchRequest = z.infer<typeof n8nDispatchRequestSchema>;
@@ -63,6 +67,8 @@ export type N8nDispatchResult = N8nDispatchSuccess | N8nDispatchFailure;
 export interface N8nDispatchClientConfig {
   webhookUrl: string;
   timeoutMs?: number;
+  /** Shared HMAC secret used to authenticate GrowthOS → n8n dispatches. */
+  sharedSecret?: string;
 }
 
 const normalizeSignature = (signature: string): string =>
@@ -103,9 +109,59 @@ const parseResponseBody = async (response: Response): Promise<unknown> => {
   }
 };
 
+export interface N8nDispatchReceiptMetadata {
+  workflowId?: string;
+  executionId?: string;
+  providerReference?: string;
+}
+
+const nonEmptyString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
+
+/**
+ * n8n gateway responses vary by workflow. Keep the raw receipt for audit, but
+ * lift common correlation IDs when they are present at either the root or a
+ * conventional `data` envelope.
+ */
+export const extractN8nDispatchReceiptMetadata = (
+  body: unknown,
+): N8nDispatchReceiptMetadata => {
+  const root =
+    body !== null && typeof body === "object" && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : {};
+  const nested =
+    root.data !== null &&
+    typeof root.data === "object" &&
+    !Array.isArray(root.data)
+      ? (root.data as Record<string, unknown>)
+      : {};
+  const get = (...keys: string[]): string | undefined => {
+    for (const key of keys) {
+      const value = nonEmptyString(root[key]) ?? nonEmptyString(nested[key]);
+      if (value) return value;
+    }
+    return undefined;
+  };
+  const workflowId = get("workflowId", "workflow_id");
+  const executionId = get("executionId", "execution_id");
+  const providerReference = get(
+    "providerReference",
+    "provider_reference",
+    "messageId",
+    "message_id",
+  );
+  return {
+    ...(workflowId !== undefined ? { workflowId } : {}),
+    ...(executionId !== undefined ? { executionId } : {}),
+    ...(providerReference !== undefined ? { providerReference } : {}),
+  };
+};
+
 export class N8nDispatchClient {
   private readonly webhookUrl: string;
   private readonly timeoutMs: number;
+  private readonly sharedSecret: string | null;
 
   constructor(
     config: N8nDispatchClientConfig,
@@ -115,26 +171,36 @@ export class N8nDispatchClient {
       .object({
         webhookUrl: z.string().url(),
         timeoutMs: z.number().int().positive().default(10_000),
+        sharedSecret: z.string().min(1).optional(),
       })
       .parse(config);
 
     this.webhookUrl = parsed.webhookUrl;
     this.timeoutMs = parsed.timeoutMs;
+    this.sharedSecret = parsed.sharedSecret ?? null;
   }
 
   async dispatch(input: N8nDispatchRequest): Promise<N8nDispatchResult> {
     const request = n8nTypedDispatchRequestSchema.parse(input);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const rawBody = JSON.stringify(request);
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "idempotency-key": request.idempotencyKey,
+    };
+    if (this.sharedSecret) {
+      headers["x-growthos-signature"] = signN8nPayload(
+        rawBody,
+        this.sharedSecret,
+      );
+    }
 
     try {
       const response = await this.fetchImpl(this.webhookUrl, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": request.idempotencyKey,
-        },
-        body: JSON.stringify(request),
+        headers,
+        body: rawBody,
         signal: controller.signal,
       });
       const body = await parseResponseBody(response);

@@ -13,6 +13,19 @@ export const critiqueCompletedPayloadSchema = z.object({
   source: z.string().min(1),
   artifact_kind: z.string().min(1),
   artifact_id: z.string().min(1),
+  /**
+   * The experiment that produced the candidate artifact, when it was created
+   * under a canary. Keeping this on the immutable critique event lets the
+   * learner link a proposed playbook mutation to measured outcomes without
+   * guessing from artifact names.
+   */
+  experiment_id: z.string().uuid().optional(),
+  /**
+   * Risk is declared by the producer/policy layer, never inferred from model
+   * output. Absent a declaration the learner treats a proposed public-facing
+   * playbook change as high risk.
+   */
+  change_risk: z.enum(["low", "medium", "high", "critical"]).optional(),
   prompt_version: z.string().min(1),
   verdict: critiqueVerdictSchema,
   confidence_score: z.number().min(0).max(1),

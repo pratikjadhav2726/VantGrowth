@@ -182,4 +182,159 @@ export const GROWTHOS_RLS_TABLE_SPECS: RlsTableSpec[] = [
     cleanupSql:
       "DELETE FROM growthos.tenant_settings WHERE tenant_id = $1::uuid",
   },
+  {
+    qualifiedName: "growthos.experiments",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      INSERT INTO growthos.experiments
+        (tenant_id, experiment_key, motion, experiment_type, unit_type, hypothesis,
+         variant_a, variant_b, metric_name, min_sample_size, created_by)
+      VALUES
+        ($1, 'rls-test-experiment-root', 'rls_test', 'ab', 'account',
+         'RLS isolation remains enforced for experiment state.',
+         '{}'::jsonb, '{}'::jsonb, 'qualified_pipeline', 1, 'rls-test')
+      ON CONFLICT DO NOTHING
+    `,
+    cleanupSql: `DELETE FROM growthos.experiments WHERE tenant_id = $1::uuid AND experiment_key = 'rls-test-experiment-root'`,
+  },
+  {
+    qualifiedName: "growthos.experiment_assignments",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      WITH experiment AS (
+        INSERT INTO growthos.experiments
+          (tenant_id, experiment_key, motion, experiment_type, unit_type, hypothesis,
+           variant_a, variant_b, metric_name, min_sample_size, created_by)
+        VALUES
+          ($1, 'rls-test-experiment-assignment', 'rls_test', 'ab', 'account',
+           'Assignment fixture requires a tenant-scoped parent experiment.',
+           '{}'::jsonb, '{}'::jsonb, 'qualified_pipeline', 1, 'rls-test')
+        ON CONFLICT (tenant_id, experiment_key) DO UPDATE
+          SET updated_at = now()
+        RETURNING id
+      )
+      INSERT INTO growthos.experiment_assignments
+        (tenant_id, experiment_id, entity_type, entity_id, variant)
+      SELECT $1, id, 'account', 'rls-test-account', 'a'
+      FROM experiment
+      ON CONFLICT DO NOTHING
+    `,
+    cleanupSql: `DELETE FROM growthos.experiments WHERE tenant_id = $1::uuid AND experiment_key = 'rls-test-experiment-assignment'`,
+  },
+  {
+    qualifiedName: "growthos.experiment_observations",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      WITH experiment AS (
+        INSERT INTO growthos.experiments
+          (tenant_id, experiment_key, motion, experiment_type, unit_type, hypothesis,
+           variant_a, variant_b, metric_name, min_sample_size, created_by, status)
+        VALUES
+          ($1, 'rls-test-experiment-observation', 'rls_test', 'ab', 'account',
+           'Observation fixture requires a tenant-scoped parent experiment.',
+           '{}'::jsonb, '{}'::jsonb, 'qualified_pipeline', 1, 'rls-test', 'running')
+        ON CONFLICT (tenant_id, experiment_key) DO UPDATE
+          SET updated_at = now()
+        RETURNING id
+      ), assignment AS (
+        INSERT INTO growthos.experiment_assignments
+          (tenant_id, experiment_id, entity_type, entity_id, variant)
+        SELECT $1, id, 'account', 'rls-test-account', 'a'
+        FROM experiment
+        ON CONFLICT (tenant_id, experiment_id, entity_type, entity_id) DO UPDATE
+          SET exposed_at = EXCLUDED.exposed_at
+        RETURNING id, experiment_id
+      )
+      INSERT INTO growthos.experiment_observations
+        (tenant_id, experiment_id, assignment_id, idempotency_key, entity_type,
+         entity_id, variant, metric_name, metric_value, attribution_confidence,
+         attribution_model, source)
+      SELECT $1, experiment_id, id, 'rls-test-observation-v1', 'account',
+             'rls-test-account', 'a', 'qualified_pipeline', 1, 1,
+             'direct', 'rls-test'
+      FROM assignment
+      ON CONFLICT DO NOTHING
+    `,
+    cleanupSql: `DELETE FROM growthos.experiments WHERE tenant_id = $1::uuid AND experiment_key = 'rls-test-experiment-observation'`,
+  },
+  {
+    qualifiedName: "growthos.learning_proposals",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      INSERT INTO growthos.learning_proposals
+        (tenant_id, proposal_key, target_type, target_id, risk, proposal_payload, created_by)
+      VALUES
+        ($1, 'rls-test-learning-proposal', 'playbook', 'rls-test-playbook',
+         'low', '{}'::jsonb, 'rls-test')
+      ON CONFLICT DO NOTHING
+    `,
+    cleanupSql: `DELETE FROM growthos.learning_proposals WHERE tenant_id = $1::uuid AND proposal_key = 'rls-test-learning-proposal'`,
+  },
+  {
+    qualifiedName: "growthos.component_health",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      INSERT INTO growthos.component_health
+        (tenant_id, component_id, idempotency_key, state, error_rate,
+         consecutive_failures, p95_latency_ms, staleness_seconds,
+         dependency_available, fallback_available, last_known_good_available,
+         recovery_attempts, action, allow_external_actions, reasons)
+      VALUES
+        ($1, 'rls-test-component', 'rls-test-health-v1', 'healthy', 0,
+         0, 0, 0, true, false, true, 0, 'none', true, ARRAY['fixture']::text[])
+      ON CONFLICT DO NOTHING
+    `,
+    cleanupSql: `DELETE FROM growthos.component_health WHERE tenant_id = $1::uuid AND component_id = 'rls-test-component'`,
+  },
+  {
+    qualifiedName: "growthos.incidents",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      INSERT INTO growthos.incidents
+        (tenant_id, incident_key, component_id, severity, title, summary)
+      VALUES
+        ($1, 'rls-test-incident', 'rls-test-component', 'low',
+         'RLS fixture incident', 'Tenant isolation fixture')
+      ON CONFLICT DO NOTHING
+    `,
+    cleanupSql: `DELETE FROM growthos.incidents WHERE tenant_id = $1::uuid AND incident_key = 'rls-test-incident'`,
+  },
+  {
+    qualifiedName: "growthos.external_actions",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      INSERT INTO growthos.external_actions
+        (tenant_id, action_id, idempotency_key, request_digest, action_type,
+         approved_by, request_payload)
+      VALUES
+        ($1, 'rls-test-external-action', 'rls-test-external-action',
+         repeat('a', 64), 'custom.execute', 'rls-test', '{}'::jsonb)
+      ON CONFLICT DO NOTHING
+    `,
+    cleanupSql: `DELETE FROM growthos.external_actions WHERE tenant_id = $1::uuid AND action_id = 'rls-test-external-action'`,
+  },
+  {
+    qualifiedName: "growthos.external_action_events",
+    tenantIdColumn: "tenant_id",
+    insertSql: `
+      WITH action AS (
+        INSERT INTO growthos.external_actions
+          (tenant_id, action_id, idempotency_key, request_digest, action_type,
+           approved_by, request_payload)
+        VALUES
+          ($1, 'rls-test-external-action-event',
+           'rls-test-external-action-event', repeat('b', 64),
+           'custom.execute', 'rls-test', '{}'::jsonb)
+        ON CONFLICT (tenant_id, action_id) DO UPDATE
+          SET updated_at = now()
+        RETURNING id
+      )
+      INSERT INTO growthos.external_action_events
+        (tenant_id, external_action_id, event_key, event_type, payload)
+      SELECT $1, id, 'rls-test-event', 'requested', '{}'::jsonb
+      FROM action
+      ON CONFLICT DO NOTHING
+    `,
+    cleanupSql: `DELETE FROM growthos.external_actions WHERE tenant_id = $1::uuid AND action_id = 'rls-test-external-action-event'`,
+  },
 ];

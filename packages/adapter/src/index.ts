@@ -20,6 +20,45 @@ export interface AdapterPort {
   enqueueOutbox(command: EventOutboxCommand): Promise<{ trackingId: string }>;
 }
 
+/**
+ * Canonical event emitted when Paperclip has successfully checked out a
+ * `growthos_native` issue and GrowthOS may begin executing it.
+ *
+ * This is deliberately an outbox event rather than a direct transport call:
+ * the caller can durably commit the handoff before an asynchronous publisher
+ * forwards it to the tenant-scoped NATS subject.
+ */
+export const paperclipWorkReadyEventType = "paperclip.work.ready.v1";
+
+export const paperclipWorkReadyContextSchema = z.object({
+  /** GrowthOS tenant that owns the Paperclip company. */
+  tenantId: z.string().uuid(),
+  paperclipCompanyId: z.string().min(1),
+  paperclipRunId: z.string().min(1),
+  agentId: z.string().min(1),
+  issueId: z.string().min(1),
+  issueIdentifier: z.string().min(1).nullable().optional(),
+  issueTitle: z.string().min(1).nullable().optional(),
+});
+
+export type PaperclipWorkReadyContext = z.infer<
+  typeof paperclipWorkReadyContextSchema
+>;
+
+export const paperclipWorkReadyPayloadSchema = z.object({
+  tenant_id: z.string().uuid(),
+  paperclip_company_id: z.string().min(1),
+  paperclip_run_id: z.string().min(1),
+  paperclip_agent_id: z.string().min(1),
+  paperclip_issue_id: z.string().min(1),
+  paperclip_issue_identifier: z.string().min(1).nullable(),
+  paperclip_issue_title: z.string().min(1).nullable(),
+});
+
+export type PaperclipWorkReadyPayload = z.infer<
+  typeof paperclipWorkReadyPayloadSchema
+>;
+
 const paperclipClientConfigSchema = z.object({
   baseUrl: z.string().url(),
   serviceToken: z.string().min(1),
@@ -187,6 +226,12 @@ export interface PaperclipClientPort {
     opts?: { limit?: number },
   ): Promise<PaperclipIssueListItem[]>;
   checkoutIssue(input: PaperclipCheckoutInput): Promise<PaperclipIssue>;
+  /**
+   * Return a failed handoff to `todo` without clearing the current assignee.
+   * This differs from Paperclip's release endpoint, which intentionally
+   * unassigns the issue and would otherwise prevent heartbeat retry.
+   */
+  requeueIssue(issueId: string): Promise<PaperclipIssue>;
   releaseIssue(issueId: string): Promise<void>;
   wakeupAgent(input: PaperclipWakeupInput): Promise<void>;
 }
@@ -276,6 +321,14 @@ export class PaperclipClient implements PaperclipClientPort {
     return paperclipIssueSchema.parse(result);
   }
 
+  async requeueIssue(issueId: string): Promise<PaperclipIssue> {
+    const parsedIssueId = z.string().min(1).parse(issueId);
+    const result = await this.request("PATCH", `/api/issues/${parsedIssueId}`, {
+      status: "todo",
+    });
+    return paperclipIssueSchema.parse(result);
+  }
+
   async releaseIssue(issueId: string): Promise<void> {
     const parsedIssueId = z.string().min(1).parse(issueId);
     await this.request("POST", `/api/issues/${parsedIssueId}/release`);
@@ -339,6 +392,35 @@ export class GrowthosNativeAdapter {
         agent_id: parsed.agentId,
         issue_id: parsed.issueId,
       },
+    });
+  }
+
+  /**
+   * Persist the execution handoff for a checked-out Paperclip issue.
+   *
+   * A Paperclip run id is the idempotency boundary: retries of the same run
+   * resolve to the existing outbox row, while a later, explicitly new run can
+   * be represented independently.
+   */
+  async emitWorkReady(
+    context: PaperclipWorkReadyContext,
+  ): Promise<{ trackingId: string }> {
+    const parsed = paperclipWorkReadyContextSchema.parse(context);
+    const payload = paperclipWorkReadyPayloadSchema.parse({
+      tenant_id: parsed.tenantId,
+      paperclip_company_id: parsed.paperclipCompanyId,
+      paperclip_run_id: parsed.paperclipRunId,
+      paperclip_agent_id: parsed.agentId,
+      paperclip_issue_id: parsed.issueId,
+      paperclip_issue_identifier: parsed.issueIdentifier ?? null,
+      paperclip_issue_title: parsed.issueTitle ?? null,
+    });
+
+    return this.port.enqueueOutbox({
+      tenantId: parsed.tenantId,
+      eventType: paperclipWorkReadyEventType,
+      idempotencyKey: `${parsed.paperclipRunId}:work-ready`,
+      payload,
     });
   }
 }

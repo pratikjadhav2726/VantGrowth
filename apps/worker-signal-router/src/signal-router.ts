@@ -1,5 +1,4 @@
 import type { OutboxRepository } from "@growthos/db";
-import { tenantScopedSubject } from "@growthos/db";
 import type { LlmCallRunner } from "@growthos/llm-harness";
 import {
   type IncomingSignal,
@@ -15,7 +14,13 @@ export interface EventPublisher {
 
 export interface SignalRouterDependencies {
   outboxRepository: OutboxRepository;
-  eventPublisher: EventPublisher;
+  /**
+   * Retained as an optional compatibility seam for callers that need a
+   * publisher reference. Domain delivery itself is intentionally outbox-only:
+   * publishing directly here races the durable outbox drain and can duplicate
+   * work after a process crash.
+   */
+  eventPublisher?: EventPublisher;
   /**
    * Optional LLM runner for signal quality grading.
    * When injected, each routed signal is enriched with a `grade` object
@@ -60,10 +65,13 @@ export const classifySignal = (
     };
   }
 
+  // The initial production motion is signal-led inbound content. Unknown
+  // market signals must enter the intelligence loop rather than disappear
+  // into an unimplemented reporting queue.
   return {
-    priority: "P3",
-    targetAgent: "reporting_director",
-    halfLifeMinutes: 10080,
+    priority: "P2",
+    targetAgent: "intel_director",
+    halfLifeMinutes: 1440,
   };
 };
 
@@ -115,11 +123,6 @@ export class SignalRouter {
       idempotencyKey: routed.dedupeKey,
       payload,
     });
-
-    await this.deps.eventPublisher.publish(
-      tenantScopedSubject(routed.tenantId, "signal.routed.v1"),
-      payload,
-    );
 
     return routed;
   }

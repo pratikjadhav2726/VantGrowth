@@ -33,8 +33,15 @@ If you want GrowthOS to run a disposable bundled n8n instead, start compose with
 docker compose -f compose.dev.yaml --profile local-n8n up --build
 ```
 
-When using bundled n8n, set `N8N_DISPATCH_WEBHOOK_URL` to
-`http://n8n:5678/webhook/growthos/dispatch`.
+For the bundled n8n profile, set the dispatch URL to
+`http://n8n:5678/webhook/growthos/dispatch`. The callback default targets
+`http://api:3001/v1/n8n/dispatch-results` over the internal Compose network.
+
+When n8n runs on the host or in another environment, override both URLs with
+addresses it can reach, for example use
+`http://host.docker.internal:5678/webhook/growthos/dispatch` for dispatch and
+`http://host.docker.internal:3091/v1/n8n/dispatch-results` for a host process
+or `https://api.example.com/v1/n8n/dispatch-results` in production.
 
 ## GrowthOS Environment
 
@@ -44,7 +51,9 @@ Required for end-to-end n8n:
 N8N_BASE_URL=http://localhost:5678
 N8N_SHARED_SECRET=growthos-dev-n8n-shared-secret
 N8N_DISPATCH_WEBHOOK_URL=http://host.docker.internal:5678/webhook/growthos/dispatch
+N8N_DISPATCH_RESULT_CALLBACK_URL=http://api:3001/v1/n8n/dispatch-results
 N8N_TIMEOUT_MS=10000
+N8N_DISPATCH_LEASE_MS=120000
 OUTBOX_TENANT_IDS=00000000-0000-0000-0001-000000000001
 OUTBOX_BATCH_SIZE_PER_TENANT=100
 OUTBOX_POLL_INTERVAL_MS=1000
@@ -156,6 +165,8 @@ Create a workflow named `growthos-dispatch-gateway`:
    - Path: `growthos/dispatch`
    - Production URL must match `N8N_DISPATCH_WEBHOOK_URL`.
 2. `Code` node:
+   - Verify `X-GrowthOS-Signature` against the exact raw dispatch body using
+     `N8N_SHARED_SECRET`; reject unsigned or invalid requests.
    - Validate `idempotencyKey`, `actionType`, and `payload.channel`.
    - Drop duplicates using n8n data store or a durable external store.
    - Enforce workflow-level rate limits and tenant/channel kill switches.
@@ -183,9 +194,41 @@ Create a workflow named `growthos-dispatch-gateway`:
 }
 ```
 
+6. After the downstream provider reaches a terminal state, post a signed
+   callback to `{{$json.callback.url}}` from the dispatch payload. Use a stable
+   `callbackId` such as `<executionId>:completed`, and retry the exact same
+   callback until GrowthOS returns a 2xx response.
+
 GrowthOS treats HTTP 429 and 5xx from this webhook as retryable. Non-retryable
 4xx responses consume the outbox row, so use 4xx only for permanent policy or
 payload failures.
+
+### Terminal dispatch callback
+
+Sign the exact JSON body using `N8N_SHARED_SECRET` and send the resulting HMAC
+in `X-GrowthOS-Signature` when calling the `callback.url` supplied by GrowthOS:
+
+```json
+{
+  "tenantId": "00000000-0000-0000-0001-000000000001",
+  "actionId": "act_123",
+  "idempotencyKey": "act_123",
+  "callbackId": "execution_456:completed",
+  "status": "completed",
+  "workflowId": "growthos-dispatch-gateway",
+  "executionId": "execution_456",
+  "providerReference": "provider_message_789",
+  "outcome": {
+    "delivered": true
+  },
+  "occurredAt": "2026-07-19T12:00:00.000Z"
+}
+```
+
+For a terminal failure, set `status` to `failed` and include `errorCode`, a
+redacted `errorMessage`, and a structured `outcome`. GrowthOS applies the
+callback exactly once, emits an outcome event for learning, and opens a durable
+control-plane incident for failures.
 
 Example LinkedIn post dispatch:
 
@@ -270,6 +313,21 @@ curl -i http://localhost:3091/v1/n8n/dispatch \
 Confirm `outbox-publisher` logs show either a successful dispatch or a retryable
 n8n webhook failure. If the n8n workflow has not been activated yet, the outbox
 row stays unconsumed on retryable failures.
+
+After n8n accepts the dispatch, validate terminal outcome capture with the same
+shared-secret HMAC (replace the IDs with the values in the dispatch payload):
+
+```bash
+RESULT='{"tenantId":"00000000-0000-0000-0001-000000000001","actionId":"email-smoke-001","idempotencyKey":"email-smoke-001","callbackId":"smoke-execution-1:completed","status":"completed","executionId":"smoke-execution-1","outcome":{"delivered":true}}'
+RESULT_SIG=$(RESULT="$RESULT" node -e 'const crypto=require("crypto"); console.log(crypto.createHmac("sha256", process.env.N8N_SHARED_SECRET || "growthos-dev-n8n-shared-secret").update(process.env.RESULT).digest("hex"))')
+curl -i http://localhost:3091/v1/n8n/dispatch-results \
+  -H 'Content-Type: application/json' \
+  -H "X-GrowthOS-Signature: sha256=$RESULT_SIG" \
+  --data "$RESULT"
+```
+
+Repeat the same callback and verify the response says `duplicate: true`; the
+action outcome must not be applied twice.
 
 ## Rollout Policy
 

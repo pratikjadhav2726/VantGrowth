@@ -10,9 +10,9 @@
 #   Pending Drizzle migrations + dev seed execute before the API starts.
 #
 # Ports exposed to localhost:
-#   API   → http://localhost:3001
-#   Web   → http://localhost:3000
-#   Postgres → localhost:5432
+#   API   → http://localhost:3091
+#   Web   → http://localhost:3080
+#   Postgres → localhost:5442
 #   NATS     → localhost:4222 / monitoring 8222
 #   ClickHouse → localhost:8123 (HTTP)
 #   MinIO console → http://localhost:9001
@@ -246,6 +246,9 @@ services:
       CLICKHOUSE_URL: http://clickhouse:8123
       MINIO_ENDPOINT: http://minio:9000
       N8N_DISPATCH_WEBHOOK_URL: ${N8N_DISPATCH_WEBHOOK_URL:-http://host.docker.internal:5678/webhook/growthos/dispatch}
+      # n8n in the `local-n8n` profile reaches the API over the Compose network.
+      # Override this with a public/host URL when n8n runs outside Compose.
+      N8N_DISPATCH_RESULT_CALLBACK_URL: ${N8N_DISPATCH_RESULT_CALLBACK_URL:-http://api:3001/v1/n8n/dispatch-results}
       N8N_SHARED_SECRET: ${N8N_SHARED_SECRET:-growthos-dev-n8n-shared-secret}
       N8N_TIMEOUT_MS: ${N8N_TIMEOUT_MS:-10000}
       VAULT_ADDR: http://openbao:8200
@@ -299,6 +302,11 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
       NATS_SERVERS: nats://nats:4222
       N8N_DISPATCH_WEBHOOK_URL: ${N8N_DISPATCH_WEBHOOK_URL:-http://host.docker.internal:5678/webhook/growthos/dispatch}
+      # n8n in the `local-n8n` profile reaches the API over the Compose network.
+      # Override this with a public/host URL when n8n runs outside Compose.
+      N8N_DISPATCH_RESULT_CALLBACK_URL: ${N8N_DISPATCH_RESULT_CALLBACK_URL:-http://api:3001/v1/n8n/dispatch-results}
+      N8N_DISPATCH_LEASE_MS: ${N8N_DISPATCH_LEASE_MS:-120000}
+      N8N_SHARED_SECRET: ${N8N_SHARED_SECRET:-growthos-dev-n8n-shared-secret}
       N8N_TIMEOUT_MS: ${N8N_TIMEOUT_MS:-10000}
       OUTBOX_BATCH_SIZE_PER_TENANT: ${OUTBOX_BATCH_SIZE_PER_TENANT:-100}
       OUTBOX_ENABLE_LISTEN_NOTIFY: ${OUTBOX_ENABLE_LISTEN_NOTIFY:-true}
@@ -320,6 +328,229 @@ services:
         condition: service_completed_successfully
       nats:
         condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Durable GTM motion workers ──────────────────────────────────────────────
+  # Signals are persisted first, routed by the inbox worker, then forwarded
+  # through JetStream only by the transactional outbox publisher. Each
+  # downstream worker has a durable consumer and can safely restart/replay.
+
+  workflow-callback:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      # Local Compose provisions through idempotent stubs. Production sets this
+      # false and supplies RESTATE_BASE_URL, or explicitly configures real clients.
+      ENABLE_DIRECT_PROVISIONING: ${ENABLE_DIRECT_PROVISIONING:-true}
+      WORKFLOW_CALLBACK_REQUEST_SUBJECT: ${WORKFLOW_CALLBACK_REQUEST_SUBJECT:-t.*.workflow.tenant_provisioning.requested.v1}
+      WORKFLOW_CALLBACK_REQUEST_DURABLE_NAME: ${WORKFLOW_CALLBACK_REQUEST_DURABLE_NAME:-growthos_workflow_callback}
+      WORKFLOW_CALLBACK_REQUEST_QUEUE_GROUP: ${WORKFLOW_CALLBACK_REQUEST_QUEUE_GROUP:-growthos-worker-workflow-callback}
+      WORKFLOW_CALLBACK_REQUEST_ACK_WAIT_MS: ${WORKFLOW_CALLBACK_REQUEST_ACK_WAIT_MS:-60000}
+      WORKFLOW_CALLBACK_REQUEST_MAX_DELIVER: ${WORKFLOW_CALLBACK_REQUEST_MAX_DELIVER:-5}
+      WORKFLOW_CALLBACK_REQUEST_RETRY_DELAY_MS: ${WORKFLOW_CALLBACK_REQUEST_RETRY_DELAY_MS:-5000}
+      WORKFLOW_CALLBACK_REQUEST_MAX_ACK_PENDING: ${WORKFLOW_CALLBACK_REQUEST_MAX_ACK_PENDING:-25}
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-workflow-callback", "dev"]
+    volumes:
+      - ./apps/worker-workflow-callback/src:/app/apps/worker-workflow-callback/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  signal-router:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      SIGNAL_ROUTER_TENANT_IDS: ${SIGNAL_ROUTER_TENANT_IDS:-00000000-0000-0000-0001-000000000001}
+      SIGNAL_ROUTER_BATCH_SIZE_PER_SIGNAL_TYPE: ${SIGNAL_ROUTER_BATCH_SIZE_PER_SIGNAL_TYPE:-50}
+      SIGNAL_ROUTER_POLL_INTERVAL_MS: ${SIGNAL_ROUTER_POLL_INTERVAL_MS:-1000}
+      SIGNAL_ROUTER_CLAIM_LEASE_MS: ${SIGNAL_ROUTER_CLAIM_LEASE_MS:-60000}
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-signal-router", "dev"]
+    volumes:
+      - ./apps/worker-signal-router/src:/app/apps/worker-signal-router/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  intel-director:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-intel-director", "dev"]
+    volumes:
+      - ./apps/worker-intel-director/src:/app/apps/worker-intel-director/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  content-strategist:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command:
+      ["pnpm", "--filter", "@growthos/worker-content-strategist", "dev"]
+    volumes:
+      - ./apps/worker-content-strategist/src:/app/apps/worker-content-strategist/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  blog-draft:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-blog-draft", "dev"]
+    volumes:
+      - ./apps/worker-blog-draft/src:/app/apps/worker-blog-draft/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  critique:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-critique", "dev"]
+    volumes:
+      - ./apps/worker-critique/src:/app/apps/worker-critique/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  learning:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-learning", "dev"]
+    volumes:
+      - ./apps/worker-learning/src:/app/apps/worker-learning/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  attribution:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-attribution", "dev"]
+    volumes:
+      - ./apps/worker-attribution/src:/app/apps/worker-attribution/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  warmth:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-warmth", "dev"]
+    volumes:
+      - ./apps/worker-warmth/src:/app/apps/worker-warmth/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:

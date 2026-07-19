@@ -136,6 +136,16 @@ describe("generateContentBrief", () => {
     expect(brief.opportunity_id).toBe(opp.opportunity_id);
   });
 
+  it("carries experiment lineage from intel through opportunity and brief", () => {
+    const experimentId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const intel = makeIntelBrief({ experiment_id: experimentId });
+    const opportunity = expandOpportunity(intel, firstOpp(intel));
+    const brief = generateContentBrief(opportunity);
+
+    expect(opportunity.experiment_id).toBe(experimentId);
+    expect(brief.experiment_id).toBe(experimentId);
+  });
+
   it("confidence_score is bounded [0, 1]", () => {
     const opp = makeOpportunity();
     const brief = generateContentBrief(opp);
@@ -185,16 +195,7 @@ describe("ContentStrategistWorker", () => {
     expect(eventTypes).toContain("content_opportunity.v1");
     expect(eventTypes).toContain("content_brief.v1");
 
-    // 2 NATS publishes per opportunity
-    expect(publishFn).toHaveBeenCalledTimes(2);
-    expect(publishFn).toHaveBeenCalledWith(
-      `t.${TENANT_ID}.content_opportunity.v1`,
-      expect.objectContaining({ schema_version: "content_opportunity.v1" }),
-    );
-    expect(publishFn).toHaveBeenCalledWith(
-      `t.${TENANT_ID}.content_brief.v1`,
-      expect.objectContaining({ schema_version: "content_brief.v1" }),
-    );
+    expect(publishFn).not.toHaveBeenCalled();
   });
 
   it("is idempotent: replayed brief produces no new outbox entries", async () => {

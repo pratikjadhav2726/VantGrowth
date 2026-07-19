@@ -45,6 +45,16 @@ export const n8nActionTypeValues = [
 export const n8nActionTypeSchema = z.enum(n8nActionTypeValues);
 export type N8nActionType = z.infer<typeof n8nActionTypeSchema>;
 
+/**
+ * A public API callback endpoint supplied by the outbox publisher. n8n uses
+ * the shared secret already configured for GrowthOS ingress when posting the
+ * terminal action result; the secret is never included in the dispatch body.
+ */
+export const n8nDispatchCallbackSchema = z.object({
+  url: z.string().url(),
+});
+export type N8nDispatchCallback = z.infer<typeof n8nDispatchCallbackSchema>;
+
 export const n8nTraceContextSchema = z.object({
   runId: z.string().min(1).max(255).optional(),
   issueId: z.string().min(1).max(255).optional(),
@@ -204,6 +214,7 @@ export const n8nTypedDispatchRequestSchema = z
     approvedBy: z.string().min(1).max(255),
     idempotencyKey: z.string().min(1).max(255),
     payload: z.record(z.unknown()).default({}),
+    callback: n8nDispatchCallbackSchema.optional(),
   })
   .superRefine((request, ctx) => {
     const actionTypeResult = n8nActionTypeSchema.safeParse(request.actionType);
@@ -244,6 +255,29 @@ export const n8nTypedDispatchRequestSchema = z
 
 export type N8nTypedDispatchRequest = z.infer<
   typeof n8nTypedDispatchRequestSchema
+>;
+
+/**
+ * Terminal execution result posted by n8n to GrowthOS. `callbackId` is a
+ * provider-generated replay key: n8n may safely retry the exact same callback
+ * until it receives a 2xx response.
+ */
+export const n8nDispatchResultCallbackSchema = z.object({
+  tenantId: z.string().uuid(),
+  actionId: z.string().min(1).max(255),
+  idempotencyKey: z.string().min(1).max(255),
+  callbackId: z.string().min(1).max(255),
+  status: z.enum(["completed", "failed"]),
+  workflowId: z.string().min(1).max(255).optional(),
+  executionId: z.string().min(1).max(255).optional(),
+  providerReference: z.string().min(1).max(255).optional(),
+  outcome: z.record(z.unknown()).default({}),
+  errorCode: z.string().min(1).max(255).optional(),
+  errorMessage: z.string().min(1).max(2_000).optional(),
+  occurredAt: z.string().datetime({ offset: true }).optional(),
+});
+export type N8nDispatchResultCallback = z.infer<
+  typeof n8nDispatchResultCallbackSchema
 >;
 
 export const n8nCanonicalSignalEnvelopeSchema = z.object({

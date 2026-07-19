@@ -3,6 +3,7 @@ import { PaperclipClient, type PaperclipClientPort } from "@growthos/adapter";
 import type { RestateWorkflowClientPort } from "@growthos/core";
 import {
   InMemoryApprovalFeedbackRepository,
+  InMemoryExternalActionsRepository,
   InMemoryMotionStackRepository,
   InMemoryOutboxRepository,
   InMemorySignalEventsRepository,
@@ -550,6 +551,7 @@ describe("API app", () => {
       })),
       listCompanyIssues: vi.fn(async () => []),
       checkoutIssue: vi.fn(),
+      requeueIssue: vi.fn(),
       releaseIssue: vi.fn(),
       wakeupAgent: vi.fn(),
     };
@@ -620,6 +622,7 @@ describe("API app", () => {
       })),
       listCompanyIssues: vi.fn(async () => []),
       checkoutIssue: vi.fn(),
+      requeueIssue: vi.fn(),
       releaseIssue: vi.fn(),
       wakeupAgent: vi.fn(),
     };
@@ -1092,7 +1095,8 @@ describe("GET /v1/approvals", () => {
 describe("POST /v1/approvals/decide", () => {
   it("records an approval decision and returns 202", async () => {
     const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
-    const app = createApp({ approvalFeedbackRepository });
+    const outboxRepository = new InMemoryOutboxRepository();
+    const app = createApp({ approvalFeedbackRepository, outboxRepository });
 
     const res = await app.request("http://localhost/v1/approvals/decide", {
       method: "POST",
@@ -1117,11 +1121,25 @@ describe("POST /v1/approvals/decide", () => {
     expect(body.accepted).toBe(true);
     expect(body.action).toBe("approved");
     expect(body.feedbackId).toBeDefined();
+
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      eventType: "learning.signal.v1",
+      payload: {
+        learningId: body.feedbackId,
+        source: "founder_approval",
+        action: "approved",
+      },
+    });
   });
 
   it("accepts reject decision with reviewerNote", async () => {
     const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
-    const app = createApp({ approvalFeedbackRepository });
+    const app = createApp({
+      approvalFeedbackRepository,
+      outboxRepository: new InMemoryOutboxRepository(),
+    });
 
     const res = await app.request("http://localhost/v1/approvals/decide", {
       method: "POST",
@@ -1143,7 +1161,10 @@ describe("POST /v1/approvals/decide", () => {
 
   it("returns 400 for invalid action value", async () => {
     const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
-    const app = createApp({ approvalFeedbackRepository });
+    const app = createApp({
+      approvalFeedbackRepository,
+      outboxRepository: new InMemoryOutboxRepository(),
+    });
 
     const res = await app.request("http://localhost/v1/approvals/decide", {
       method: "POST",
@@ -1882,6 +1903,23 @@ describe("/v1/n8n", () => {
     expect(res.status).toBe(401);
   });
 
+  it("fails closed when n8n signal authentication is not configured", async () => {
+    const app = createApp({
+      signalEventsRepository: new InMemorySignalEventsRepository(),
+    });
+    const res = await app.request("http://localhost/v1/n8n/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+        "Idempotency-Key": "evt_reply_1",
+      },
+      body: JSON.stringify(n8nSignal),
+    });
+
+    expect(res.status).toBe(503);
+  });
+
   it("rejects n8n signals with missing tenant", async () => {
     const body = JSON.stringify(n8nSignal);
     const secret = "n8n-test-secret";
@@ -1939,10 +1977,17 @@ describe("/v1/n8n", () => {
 
   it("enqueues approved n8n dispatch requests", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
+    const externalActionsRepository = new InMemoryExternalActionsRepository(
+      outboxRepository,
+    );
     const app = createApp({
       apiServiceToken: "growthos-token",
       outboxRepository,
+      externalActionsRepository,
+      n8nSharedSecret: "n8n-test-secret",
       n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+      n8nDispatchResultCallbackUrl:
+        "https://api.example/v1/n8n/dispatch-results",
     });
 
     const res = await app.request("http://localhost/v1/n8n/dispatch", {
@@ -1950,6 +1995,7 @@ describe("/v1/n8n", () => {
       headers: {
         "content-type": "application/json",
         authorization: "Bearer growthos-token",
+        "X-Tenant-Id": tenantId,
       },
       body: JSON.stringify({
         tenantId,
@@ -1974,6 +2020,186 @@ describe("/v1/n8n", () => {
       actionId: "act_1",
       actionType: "email.send",
     });
+    expect(
+      await externalActionsRepository.getByActionId(tenantId, "act_1"),
+    ).toMatchObject({ state: "requested" });
+  });
+
+  it("rejects a service dispatch that attempts to spoof another tenant", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const externalActionsRepository = new InMemoryExternalActionsRepository(
+      outboxRepository,
+    );
+    const app = createApp({
+      apiServiceToken: "growthos-token",
+      outboxRepository,
+      externalActionsRepository,
+      n8nSharedSecret: "n8n-test-secret",
+      n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+      n8nDispatchResultCallbackUrl:
+        "https://api.example/v1/n8n/dispatch-results",
+    });
+    const otherTenantId = "00000000-0000-4000-8000-000000000002";
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer growthos-token",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        tenantId: otherTenantId,
+        actionId: "act_cross_tenant",
+        actionType: "email.send",
+        approvedBy: "founder",
+        idempotencyKey: "act_cross_tenant",
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(await outboxRepository.listUnconsumed(tenantId, 10)).toHaveLength(0);
+    expect(
+      await outboxRepository.listUnconsumed(otherTenantId, 10),
+    ).toHaveLength(0);
+  });
+
+  it("requires the tenant header for a service dispatch", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const app = createApp({
+      apiServiceToken: "growthos-token",
+      outboxRepository,
+      externalActionsRepository: new InMemoryExternalActionsRepository(
+        outboxRepository,
+      ),
+      n8nSharedSecret: "n8n-test-secret",
+      n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+      n8nDispatchResultCallbackUrl:
+        "https://api.example/v1/n8n/dispatch-results",
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer growthos-token",
+      },
+      body: JSON.stringify({
+        tenantId,
+        actionId: "act_without_header",
+        actionType: "email.send",
+        approvedBy: "founder",
+        idempotencyKey: "act_without_header",
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await outboxRepository.listUnconsumed(tenantId, 10)).toHaveLength(0);
+  });
+
+  it("records a signed n8n terminal dispatch callback exactly once", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const externalActionsRepository = new InMemoryExternalActionsRepository(
+      outboxRepository,
+    );
+    const secret = "n8n-test-secret";
+    const app = createApp({
+      outboxRepository,
+      externalActionsRepository,
+      n8nSharedSecret: secret,
+      n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+      n8nDispatchResultCallbackUrl:
+        "https://api.example/v1/n8n/dispatch-results",
+    });
+    await externalActionsRepository.enqueueRequested({
+      tenantId,
+      actionId: "act_callback_1",
+      actionType: "email.send",
+      approvedBy: "founder",
+      idempotencyKey: "act_callback_1",
+      requestPayload: {
+        channel: "email",
+        to: ["buyer@example.com"],
+        subject: "Hello",
+        text: "Hello from GrowthOS.",
+      },
+    });
+    const callback = {
+      tenantId,
+      actionId: "act_callback_1",
+      idempotencyKey: "act_callback_1",
+      callbackId: "n8n-execution-1:completed",
+      status: "completed",
+      executionId: "n8n-execution-1",
+      outcome: { delivered: true, providerMessageId: "msg-1" },
+    };
+    const body = JSON.stringify(callback);
+    const request = {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-GrowthOS-Signature": sign(body, secret),
+      },
+      body,
+    };
+
+    const first = await app.request(
+      "http://localhost/v1/n8n/dispatch-results",
+      request,
+    );
+    const duplicate = await app.request(
+      "http://localhost/v1/n8n/dispatch-results",
+      request,
+    );
+
+    expect(first.status).toBe(202);
+    expect(await duplicate.json()).toMatchObject({ duplicate: true });
+    expect(
+      await externalActionsRepository.getByActionId(tenantId, "act_callback_1"),
+    ).toMatchObject({
+      state: "completed",
+      executionId: "n8n-execution-1",
+      outcome: { delivered: true, providerMessageId: "msg-1" },
+    });
+    expect(
+      (await outboxRepository.listUnconsumed(tenantId, 10)).map(
+        (event) => event.eventType,
+      ),
+    ).toContain("external_action.completed.v1");
+  });
+
+  it("rejects n8n terminal callbacks with an invalid signature", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const app = createApp({
+      outboxRepository,
+      externalActionsRepository: new InMemoryExternalActionsRepository(
+        outboxRepository,
+      ),
+      n8nSharedSecret: "n8n-test-secret",
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch-results", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-GrowthOS-Signature": "0".repeat(64),
+      },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(401);
   });
 
   it("protects n8n dispatch with the service token", async () => {

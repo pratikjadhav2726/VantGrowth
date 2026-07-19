@@ -13,8 +13,8 @@ docker compose -f compose.dev.yaml up --build -d
 
 Open:
 
-- Web: `http://localhost:3000`
-- API health: `http://localhost:3001/health`
+- Web: `http://localhost:3080`
+- API health: `http://localhost:3091/health`
 
 ## 2) Login
 
@@ -86,3 +86,4 @@ For infra incidents, see:
 - `docs/runbooks/nats-leader-loss.md`
 - `docs/runbooks/postgres-failover.md`
 - `docs/runbooks/openbao-seal-unseal.md`
+- `docs/runbooks/adaptive-gtm-local-runtime.md`

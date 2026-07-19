@@ -99,6 +99,56 @@ describe("InMemorySignalEventsRepository", () => {
     expect(result[0]?.tenantId).toBe(TENANT_A);
   });
 
+  it("leases a signal to one router replica and keeps it unavailable to another", async () => {
+    const repo = new InMemorySignalEventsRepository();
+    const { event } = await repo.ingest(baseSignal);
+
+    const first = await repo.claimUnprocessed(TENANT_A, "competitive", 10, {
+      owner: "router-a",
+      leaseMs: 60_000,
+    });
+    const second = await repo.claimUnprocessed(TENANT_A, "competitive", 10, {
+      owner: "router-b",
+      leaseMs: 60_000,
+    });
+
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({
+      id: event.id,
+      processingLeaseOwner: "router-a",
+      processingAttempts: 1,
+    });
+    expect(second).toHaveLength(0);
+  });
+
+  it("releases a failed claim for retry without allowing another owner to release it", async () => {
+    const repo = new InMemorySignalEventsRepository();
+    const { event } = await repo.ingest(baseSignal);
+    await repo.claimUnprocessed(TENANT_A, "competitive", 10, {
+      owner: "router-a",
+      leaseMs: 60_000,
+    });
+
+    await repo.releaseClaims(TENANT_A, [event.id], "router-b");
+    expect(
+      await repo.claimUnprocessed(TENANT_A, "competitive", 10, {
+        owner: "router-b",
+        leaseMs: 60_000,
+      }),
+    ).toHaveLength(0);
+
+    await repo.releaseClaims(TENANT_A, [event.id], "router-a");
+    const retry = await repo.claimUnprocessed(TENANT_A, "competitive", 10, {
+      owner: "router-b",
+      leaseMs: 60_000,
+    });
+    expect(retry[0]).toMatchObject({
+      id: event.id,
+      processingLeaseOwner: "router-b",
+      processingAttempts: 2,
+    });
+  });
+
   it("markProcessed sets processedAt and hides record from listUnprocessed", async () => {
     const repo = new InMemorySignalEventsRepository();
     const { event: e1 } = await repo.ingest(baseSignal);
@@ -132,5 +182,21 @@ describe("InMemorySignalEventsRepository", () => {
     await repo.markProcessed(TENANT_B, [event.id]); // wrong tenant — no-op
     const unprocessed = await repo.listUnprocessed(TENANT_A, "competitive", 10);
     expect(unprocessed).toHaveLength(1); // still unprocessed
+  });
+
+  it("clears a processing lease when a claim is completed", async () => {
+    const repo = new InMemorySignalEventsRepository();
+    const { event } = await repo.ingest(baseSignal);
+    await repo.claimUnprocessed(TENANT_A, "competitive", 10, {
+      owner: "router-a",
+      leaseMs: 60_000,
+    });
+    await repo.markProcessed(TENANT_A, [event.id]);
+
+    const replay = await repo.claimUnprocessed(TENANT_A, "competitive", 10, {
+      owner: "router-b",
+      leaseMs: 60_000,
+    });
+    expect(replay).toHaveLength(0);
   });
 });

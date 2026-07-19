@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@growthos/adapter": "workspace:*",
+    "@growthos/db": "workspace:*",
     "@growthos/observability": "workspace:*",
     "zod": "^3.23.8"
   },

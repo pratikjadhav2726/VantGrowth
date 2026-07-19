@@ -5,7 +5,14 @@ import {
   connect,
 } from "nats";
 import { z } from "zod";
-import type { EventPublisher } from "./workflow-callback-worker.js";
+
+/**
+ * Legacy compatibility surface only. The workflow callback runtime is
+ * outbox-only and must not use this publisher for lifecycle events.
+ */
+export interface LegacyEventPublisher {
+  publish(subject: string, payload: Record<string, unknown>): Promise<void>;
+}
 
 const natsConfigSchema = z.object({
   servers: z.string().min(1),
@@ -21,7 +28,7 @@ export const natsConfigFromEnv = (
   name: env.NATS_CLIENT_NAME ?? "growthos-worker-workflow-callback",
 });
 
-export class NatsJetStreamPublisher implements EventPublisher {
+export class NatsJetStreamPublisher implements LegacyEventPublisher {
   private readonly codec = JSONCodec<Record<string, unknown>>();
 
   constructor(

@@ -2,10 +2,9 @@
  * OutboxProvisioningProgressReporter
  *
  * Bridges the TenantProvisioningOrchestrator's ProvisioningProgressReporter
- * interface to the Postgres outbox + NATS event pipeline.  Each call to
- * report() enqueues a progress event in the outbox (durable) and publishes it
- * immediately to the NATS subject (live push), ensuring idempotent delivery
- * when the NATS message is re-delivered on retry.
+ * interface to the Postgres outbox. Each call to report() writes a durable
+ * progress event; the dedicated outbox publisher is the sole component that
+ * later publishes it to JetStream.
  *
  * The callbackId is derived deterministically from (workflowId, step,
  * progressPercent) so that a replayed orchestrator step generates the same
@@ -18,8 +17,6 @@ import {
   createTenantProvisioningProgressOutboxCommand,
 } from "@growthos/core";
 import type { OutboxRepository } from "@growthos/db";
-import { tenantScopedSubject } from "@growthos/db";
-import type { EventPublisher } from "./workflow-callback-worker.js";
 
 export interface OutboxProgressReporterContext {
   tenantId: string;
@@ -35,7 +32,6 @@ export class OutboxProvisioningProgressReporter
 {
   constructor(
     private readonly outboxRepository: OutboxRepository,
-    private readonly eventPublisher: EventPublisher,
     private readonly ctx: OutboxProgressReporterContext,
   ) {}
 
@@ -59,12 +55,5 @@ export class OutboxProvisioningProgressReporter
     });
 
     await this.outboxRepository.enqueue(command);
-    await this.eventPublisher.publish(
-      tenantScopedSubject(
-        this.ctx.tenantId,
-        "workflow.tenant_provisioning.progress.v1",
-      ),
-      command.payload,
-    );
   }
 }

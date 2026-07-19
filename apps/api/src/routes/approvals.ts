@@ -15,6 +15,7 @@
  */
 
 import type {
+  ApprovalFeedback,
   ApprovalFeedbackRepository,
   OutboxRepository,
 } from "@growthos/db";
@@ -73,6 +74,39 @@ const extractIssueId = (payload: Record<string, unknown>): string | null => {
   }
   return null;
 };
+
+const learningSignalPayload = (feedback: ApprovalFeedback) => ({
+  tenantId: feedback.tenantId,
+  learningId: feedback.id,
+  dedupeKey: `approval-feedback:${feedback.id}`,
+  source: "founder_approval",
+  issueId: feedback.issueId,
+  outputType: feedback.outputType,
+  action: feedback.action,
+  editDistance:
+    feedback.editDistance === null ? null : Number(feedback.editDistance),
+  rubricFailures: feedback.rubricFailures,
+  ...(feedback.reviewerNote ? { reviewerNote: feedback.reviewerNote } : {}),
+  learnOptIn: feedback.learnOptIn,
+});
+
+type AtomicLearningFeedbackRepository = ApprovalFeedbackRepository & {
+  recordAndEnqueueLearningSignal(params: {
+    tenantId: string;
+    issueId: string;
+    outputType: string;
+    action: "approved" | "edited_then_approved" | "rejected";
+    editDistance?: number;
+    reviewerNote?: string;
+    learnOptIn: boolean;
+  }): Promise<ApprovalFeedback>;
+};
+
+const supportsAtomicLearningSignal = (
+  repository: ApprovalFeedbackRepository,
+): repository is AtomicLearningFeedbackRepository =>
+  "recordAndEnqueueLearningSignal" in repository &&
+  typeof repository.recordAndEnqueueLearningSignal === "function";
 
 // ---------------------------------------------------------------------------
 // Route factory
@@ -169,8 +203,13 @@ export const createApprovalRoutes = (deps: ApprovalRouteDependencies): Hono => {
     }
 
     const body = approvalDecisionSchema.parse(await c.req.json());
+    if (!deps.outboxRepository) {
+      throw new ServiceUnavailableError(
+        "Outbox repository is not configured. Set DATABASE_URL.",
+      );
+    }
 
-    const feedback = await deps.approvalFeedbackRepository.record({
+    const recordParams = {
       tenantId,
       issueId: body.issueId,
       outputType: body.outputType,
@@ -182,7 +221,28 @@ export const createApprovalRoutes = (deps: ApprovalRouteDependencies): Hono => {
         ? { reviewerNote: body.reviewerNote }
         : {}),
       learnOptIn: body.learnOptIn ?? true,
-    });
+    };
+
+    const feedback = supportsAtomicLearningSignal(
+      deps.approvalFeedbackRepository,
+    )
+      ? await deps.approvalFeedbackRepository.recordAndEnqueueLearningSignal(
+          recordParams,
+        )
+      : await deps.approvalFeedbackRepository.record(recordParams);
+
+    // In-memory/adapter repositories do not expose a shared database
+    // transaction. Production Postgres uses the atomic branch above; this
+    // fallback preserves the same contract for tests and alternate adapters.
+    if (!supportsAtomicLearningSignal(deps.approvalFeedbackRepository)) {
+      const payload = learningSignalPayload(feedback);
+      await deps.outboxRepository.enqueue({
+        tenantId,
+        eventType: "learning.signal.v1",
+        idempotencyKey: payload.dedupeKey,
+        payload,
+      });
+    }
 
     return c.json(
       {

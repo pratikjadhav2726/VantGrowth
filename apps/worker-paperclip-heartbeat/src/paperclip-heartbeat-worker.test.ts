@@ -11,10 +11,15 @@ import {
 
 const silentLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
+const tenantId = "11111111-1111-4111-8111-111111111111";
+
 const baseEnv = {
   PAPERCLIP_BASE_URL: "http://paperclip:3100",
   PAPERCLIP_SERVICE_TOKEN: "svc",
   PAPERCLIP_HEARTBEAT_COMPANY_IDS: "cmp_1",
+  PAPERCLIP_HEARTBEAT_COMPANY_TENANT_MAP: JSON.stringify({
+    cmp_1: tenantId,
+  }),
 };
 
 const issue = (
@@ -44,6 +49,12 @@ function makeClient(issues: PaperclipIssueListItem[]): PaperclipClientPort & {
       title: "Do work",
       status: "in_progress",
     })),
+    requeueIssue: vi.fn(async () => ({
+      id: "iss_1",
+      identifier: "ACME-1",
+      title: "Do work",
+      status: "todo",
+    })),
     releaseIssue: vi.fn(async () => undefined),
     wakeupAgent: vi.fn(async () => undefined),
     // biome-ignore lint/suspicious/noExplicitAny: test double
@@ -51,6 +62,18 @@ function makeClient(issues: PaperclipIssueListItem[]): PaperclipClientPort & {
 }
 
 describe("PaperclipHeartbeatWorker", () => {
+  it("requires an explicit company-to-tenant map for live dispatch", () => {
+    const { PAPERCLIP_HEARTBEAT_COMPANY_TENANT_MAP: _, ...envWithoutMap } =
+      baseEnv;
+
+    expect(() =>
+      configFromEnv({
+        ...envWithoutMap,
+        PAPERCLIP_HEARTBEAT_DRY_RUN: "false",
+      }),
+    ).toThrow("Live Paperclip dispatch requires a GrowthOS tenant mapping");
+  });
+
   it("dry-run does not mutate Paperclip", async () => {
     const client = makeClient([issue()]);
     const worker = new PaperclipHeartbeatWorker({
@@ -92,10 +115,12 @@ describe("PaperclipHeartbeatWorker", () => {
     expect(client.checkoutIssue).toHaveBeenCalledWith({
       issueId: "runnable",
       agentId: "agt_1",
+      expectedStatuses: ["todo", "backlog"],
       runId: "run_1",
     });
     expect(dispatched).toEqual([
       expect.objectContaining({
+        tenantId,
         issueId: "runnable",
         agentId: "agt_1",
         runId: "run_1",
@@ -103,7 +128,7 @@ describe("PaperclipHeartbeatWorker", () => {
     ]);
   });
 
-  it("releases the issue if dispatch fails", async () => {
+  it("requeues the issue without unassigning it if dispatch fails", async () => {
     const client = makeClient([issue({ id: "boom" })]);
     const worker = new PaperclipHeartbeatWorker({
       client,
@@ -119,6 +144,63 @@ describe("PaperclipHeartbeatWorker", () => {
 
     await worker.tick();
 
-    expect(client.releaseIssue).toHaveBeenCalledWith("boom");
+    expect(client.requeueIssue).toHaveBeenCalledWith("boom");
+    expect(client.releaseIssue).not.toHaveBeenCalled();
+  });
+
+  it("fails closed and requeues an issue when live dispatch is not wired", async () => {
+    const client = makeClient([issue({ id: "unwired" })]);
+    const worker = new PaperclipHeartbeatWorker({
+      client,
+      config: configFromEnv({
+        ...baseEnv,
+        PAPERCLIP_HEARTBEAT_DRY_RUN: "false",
+      }),
+      logger: silentLogger,
+    });
+
+    await worker.tick();
+
+    expect(client.checkoutIssue).toHaveBeenCalledTimes(1);
+    expect(client.requeueIssue).toHaveBeenCalledWith("unwired");
+  });
+
+  it("does not requeue an issue when checkout itself fails", async () => {
+    const client = makeClient([issue({ id: "claimed-elsewhere" })]);
+    client.checkoutIssue.mockRejectedValueOnce(
+      new Error("issue is already checked out"),
+    );
+    const worker = new PaperclipHeartbeatWorker({
+      client,
+      config: configFromEnv({
+        ...baseEnv,
+        PAPERCLIP_HEARTBEAT_DRY_RUN: "false",
+      }),
+      logger: silentLogger,
+      dispatch: async () => undefined,
+    });
+
+    await worker.tick();
+
+    expect(client.requeueIssue).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed cross-company issue before checkout", async () => {
+    const client = makeClient([
+      issue({ id: "cross-company", companyId: "cmp_other" }),
+    ]);
+    const worker = new PaperclipHeartbeatWorker({
+      client,
+      config: configFromEnv({
+        ...baseEnv,
+        PAPERCLIP_HEARTBEAT_DRY_RUN: "false",
+      }),
+      logger: silentLogger,
+      dispatch: async () => undefined,
+    });
+
+    await worker.tick();
+
+    expect(client.checkoutIssue).not.toHaveBeenCalled();
   });
 });

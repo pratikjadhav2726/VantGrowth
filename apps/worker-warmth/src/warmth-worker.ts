@@ -1,5 +1,4 @@
 import type { OutboxRepository } from "@growthos/db";
-import { tenantScopedSubject } from "@growthos/db";
 import {
   type WarmthResult,
   type WarmthSignal,
@@ -7,13 +6,8 @@ import {
   warmthSignalSchema,
 } from "./contracts.js";
 
-export interface EventPublisher {
-  publish(subject: string, payload: Record<string, unknown>): Promise<void>;
-}
-
 export interface WarmthWorkerDependencies {
   outboxRepository: OutboxRepository;
-  eventPublisher: EventPublisher;
   now?: () => Date;
 }
 
@@ -83,6 +77,7 @@ export class WarmthWorker {
     });
 
     const payload = {
+      tenant_id: result.tenantId,
       warmth_id: result.warmthId,
       source: result.source,
       subject_id: result.subjectId,
@@ -101,11 +96,6 @@ export class WarmthWorker {
       idempotencyKey: result.dedupeKey,
       payload,
     });
-
-    await this.deps.eventPublisher.publish(
-      tenantScopedSubject(result.tenantId, "warmth.evaluated.v1"),
-      payload,
-    );
 
     return result;
   }

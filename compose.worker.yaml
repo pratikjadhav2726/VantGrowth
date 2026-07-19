@@ -2,8 +2,9 @@
 # `growthos_native` agents. Polls Paperclip for runnable issues assigned to
 # approved agents and dispatches them into the GrowthOS domain workers.
 #
-# Joins the existing growthos-dev network so it can reach both the GrowthOS API
-# and Paperclip (http://paperclip:3100).
+# Joins the shared GrowthOS network so it can reach Postgres and Paperclip
+# (http://paperclip:3100). The outbox-publisher service on the same network
+# forwards durable work-ready rows to JetStream.
 #
 #   docker compose -f compose.worker.yaml up -d --build
 #
@@ -27,10 +28,10 @@ services:
       # PAPERCLIP_BASE_URL / PAPERCLIP_SERVICE_TOKEN come from .env.
       # Override BASE_URL for the in-network hostname:
       PAPERCLIP_BASE_URL: "http://paperclip:3100"
-      # Companies this worker services (comma-separated). Defaults to the
-      # Insurance company E2E company created during integration testing.
-      PAPERCLIP_HEARTBEAT_COMPANY_IDS: "${PAPERCLIP_HEARTBEAT_COMPANY_IDS:-6089ae0f-8e93-4233-bb68-41aa29fbf561}"
-      PAPERCLIP_HEARTBEAT_POLL_MS: "15000"
+      # PAPERCLIP_HEARTBEAT_COMPANY_IDS and the required
+      # PAPERCLIP_HEARTBEAT_COMPANY_TENANT_MAP come from .env. Live mode fails
+      # closed unless each company has an explicit GrowthOS tenant UUID.
+      PAPERCLIP_HEARTBEAT_POLL_MS: "${PAPERCLIP_HEARTBEAT_POLL_MS:-15000}"
       PAPERCLIP_HEARTBEAT_DRY_RUN: "${PAPERCLIP_HEARTBEAT_DRY_RUN:-true}"
     volumes:
       - ./apps/worker-paperclip-heartbeat/src:/app/apps/worker-paperclip-heartbeat/src:ro
@@ -43,4 +44,4 @@ services:
 networks:
   growthos:
     external: true
-    name: growthos-dev_default
+    name: ${GROWTHOS_DOCKER_NETWORK:-growthos-dev_default}

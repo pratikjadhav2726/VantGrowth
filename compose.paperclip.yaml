@@ -61,7 +61,7 @@ services:
 networks:
   growthos:
     external: true
-    name: ${GROWTHOS_DOCKER_NETWORK:-growthos-n8n-local_default}
+    name: ${GROWTHOS_DOCKER_NETWORK:-growthos-dev_default}
 
 volumes:
   paperclip-pgdata:

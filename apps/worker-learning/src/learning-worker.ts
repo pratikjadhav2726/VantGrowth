@@ -4,11 +4,13 @@ import {
   evaluateLearningProposal,
 } from "@growthos/core";
 import type {
+  LearningProposalRecord,
+  LearningProposalRepository,
   OutboxRepository,
   PlaybookVersionRecord,
   PlaybookVersionsRepository,
 } from "@growthos/db";
-import { tenantScopedSubject } from "@growthos/db";
+import { z } from "zod";
 import {
   type CritiqueCompletedPayload,
   type LearnerRubricContent,
@@ -27,8 +29,15 @@ export interface EventPublisher {
 
 export interface LearningWorkerDependencies {
   outboxRepository: OutboxRepository;
-  eventPublisher: EventPublisher;
+  /** Delivery is outbox-only; retained as an optional compatibility seam. */
+  eventPublisher?: EventPublisher;
   playbookRepository?: PlaybookVersionsRepository;
+  /**
+   * Durable lifecycle store for every proposed change. When configured, a
+   * critique can never mutate a playbook until its experiment evidence and
+   * policy decision have been persisted here.
+   */
+  learningProposalRepository?: LearningProposalRepository;
   promotionEvidenceProvider?: PromotionEvidenceProvider;
   learningPolicy?: Partial<AdaptiveLearningPolicy>;
 }
@@ -48,6 +57,30 @@ export interface PromotionEvidenceProvider {
     proposal: PlaybookChangeProposal,
   ): Promise<LearningProposalEvaluation | null>;
 }
+
+const persistedCritiqueProposalPayloadSchema = z.object({
+  tenant_id: z.string().uuid(),
+  proposal_id: z.string().min(1),
+  experiment_id: z.string().uuid().optional(),
+  change_risk: z.enum(["low", "medium", "high", "critical"]),
+  playbook_type: z.enum([
+    "blog_draft",
+    "content_brief",
+    "intel_brief",
+    "custom",
+  ]),
+  artifact_kind: z.string().min(1),
+  artifact_id: z.string().min(1),
+  critique_id: z.string().min(1),
+  source: z.string().min(1),
+  prompt_version: z.string().min(1),
+  verdict: z.enum(["revise", "reject"]),
+  confidence_score: z.number().min(0).max(1),
+  failure_reasons: z.array(z.string().min(1)),
+  critiqued_at: z.string().datetime({ offset: true }),
+  status: z.literal("awaiting_evidence"),
+  proposed_at: z.string().datetime({ offset: true }),
+});
 
 // ---------------------------------------------------------------------------
 // Artifact kind → playbook type mapping
@@ -228,7 +261,7 @@ export class LearningWorker {
 
   // ── Approval-feedback path (existing) ───────────────────────────────────
 
-  async process(input: LearningSignal): Promise<LearningCandidate> {
+  async process(input: unknown): Promise<LearningCandidate> {
     const signal = learningSignalSchema.parse(input);
     const candidate = learningCandidateSchema.parse({
       ...signal,
@@ -258,14 +291,6 @@ export class LearningWorker {
       idempotencyKey: candidate.dedupeKey,
       payload,
     });
-
-    await this.deps.eventPublisher.publish(
-      tenantScopedSubject(
-        candidate.tenantId,
-        "learning.candidate.synthesized.v1",
-      ),
-      payload,
-    );
 
     return candidate;
   }
@@ -312,31 +337,51 @@ export class LearningWorker {
       verdict: critique.verdict,
     };
 
+    // A safe default is deliberate: the learner may not infer a lower risk
+    // tier from an LLM critique. A producer that has passed policy evaluation
+    // can explicitly attach a lower risk tier to the immutable critique event.
+    const risk = critique.change_risk ?? "high";
+
     const proposedPayload = {
       tenant_id: tenantId,
       proposal_id: proposal.proposalId,
+      ...(critique.experiment_id
+        ? { experiment_id: critique.experiment_id }
+        : {}),
+      change_risk: risk,
       playbook_type: playbookType,
       artifact_kind: critique.artifact_kind,
       artifact_id: critique.artifact_id,
       critique_id: critique.critique_id,
+      source: critique.source,
+      prompt_version: critique.prompt_version,
       verdict: critique.verdict,
       confidence_score: critique.confidence_score,
       failure_reasons: critique.reasons,
+      critiqued_at: critique.critiqued_at,
       status: "awaiting_evidence",
       proposed_at: new Date().toISOString(),
     };
+
+    const persistedProposal = await this.persistProposal(
+      tenantId,
+      proposal,
+      critique,
+      risk,
+      proposedPayload,
+    );
 
     await this.deps.outboxRepository.enqueue({
       tenantId,
       eventType: "learning.playbook.change.proposed.v1",
       idempotencyKey: `playbook-proposal:${critique.critique_id}`,
-      payload: proposedPayload,
+      payload: {
+        ...proposedPayload,
+        ...(persistedProposal
+          ? { learning_proposal_id: persistedProposal.id }
+          : {}),
+      },
     });
-    await this.deps.eventPublisher.publish(
-      tenantScopedSubject(tenantId, "learning.playbook.change.proposed.v1"),
-      proposedPayload,
-    );
-
     if (!this.deps.playbookRepository || !this.deps.promotionEvidenceProvider) {
       return null;
     }
@@ -349,7 +394,126 @@ export class LearningWorker {
       evaluation,
       this.deps.learningPolicy,
     );
+
+    const isPromotionEligible = await this.recordPromotionDecision(
+      tenantId,
+      persistedProposal,
+      evaluation,
+      promotion,
+    );
+    if (!isPromotionEligible) return null;
     if (promotion.decision !== "promote") return null;
+
+    return this.promotePlaybookChange(
+      tenantId,
+      proposal,
+      critique,
+      playbookType,
+      persistedProposal,
+      promotion.relativeLift,
+    );
+  }
+
+  /**
+   * Processes the durable request emitted after a founder approves a
+   * high-risk proposal. Evidence is deliberately re-read: a prior approval
+   * does not license promotion if attribution or guardrails have since moved.
+   */
+  async processApprovedProposal(
+    tenantId: string,
+    proposalId: string,
+  ): Promise<PlaybookVersionRecord | null> {
+    if (
+      !this.deps.learningProposalRepository ||
+      !this.deps.playbookRepository ||
+      !this.deps.promotionEvidenceProvider
+    ) {
+      return null;
+    }
+
+    const persistedProposal =
+      await this.deps.learningProposalRepository.getById(tenantId, proposalId);
+    if (!persistedProposal || persistedProposal.status !== "approved") {
+      return null;
+    }
+
+    const stored = persistedCritiqueProposalPayloadSchema.parse(
+      persistedProposal.proposalPayload,
+    );
+    const critique = critiqueCompletedPayloadSchema.parse({
+      critique_id: stored.critique_id,
+      source: stored.source,
+      artifact_kind: stored.artifact_kind,
+      artifact_id: stored.artifact_id,
+      ...(stored.experiment_id ? { experiment_id: stored.experiment_id } : {}),
+      change_risk: stored.change_risk,
+      prompt_version: stored.prompt_version,
+      verdict: stored.verdict,
+      confidence_score: stored.confidence_score,
+      reasons: stored.failure_reasons,
+      critiqued_at: stored.critiqued_at,
+    });
+    const proposal: PlaybookChangeProposal = {
+      tenantId,
+      proposalId: stored.proposal_id,
+      artifactKind: stored.artifact_kind,
+      artifactId: stored.artifact_id,
+      playbookType: stored.playbook_type,
+      verdict: stored.verdict,
+    };
+    const evaluation =
+      await this.deps.promotionEvidenceProvider.getEvaluation(proposal);
+    if (!evaluation) return null;
+
+    const promotion = evaluateLearningProposal(
+      evaluation,
+      this.deps.learningPolicy,
+    );
+    const isPromotionEligible = await this.recordPromotionDecision(
+      tenantId,
+      persistedProposal,
+      evaluation,
+      promotion,
+    );
+    if (!isPromotionEligible || promotion.decision !== "promote") return null;
+
+    return this.promotePlaybookChange(
+      tenantId,
+      proposal,
+      critique,
+      stored.playbook_type,
+      persistedProposal,
+      promotion.relativeLift,
+    );
+  }
+
+  private async promotePlaybookChange(
+    tenantId: string,
+    proposal: PlaybookChangeProposal,
+    critique: CritiqueCompletedPayload,
+    playbookType: PlaybookChangeProposal["playbookType"],
+    persistedProposal: LearningProposalRecord | null,
+    relativeLift: number,
+  ): Promise<PlaybookVersionRecord | null> {
+    if (!this.deps.playbookRepository) {
+      throw new Error("Playbook repository is required to promote a proposal.");
+    }
+
+    // The durable proposal is the single-writer boundary. Claim it before
+    // even looking for an idempotent version: a later worker can safely
+    // reconcile a version left behind by a crashed claimant only after its
+    // bounded lease expires. Legacy callers without a durable proposal retain
+    // their compatibility path, but production learning always has one.
+    const promotionClaim =
+      persistedProposal && this.deps.learningProposalRepository
+        ? await this.deps.learningProposalRepository.claimPromotion(
+            tenantId,
+            persistedProposal.id,
+          )
+        : null;
+    if (persistedProposal && !promotionClaim) {
+      return null;
+    }
 
     const priorVersions = await this.deps.playbookRepository.listAll(
       tenantId,
@@ -359,7 +523,28 @@ export class LearningWorker {
     const existingPromotion = priorVersions.find(
       (version) => version.createdBy === createdBy,
     );
-    if (existingPromotion) return existingPromotion;
+    if (existingPromotion) {
+      // A previous claimant may have created the version and crashed before it
+      // could publish the durable update. Enqueue is idempotent, so this also
+      // safely reconciles ordinary redelivery.
+      await this.enqueuePlaybookUpdated(
+        tenantId,
+        proposal,
+        critique,
+        playbookType,
+        persistedProposal,
+        existingPromotion.id,
+        0,
+        relativeLift,
+      );
+      await this.markProposalPromoted(
+        tenantId,
+        persistedProposal,
+        existingPromotion.id,
+        promotionClaim?.token,
+      );
+      return existingPromotion;
+    }
 
     const existing = await this.deps.playbookRepository.getActive(
       tenantId,
@@ -380,32 +565,170 @@ export class LearningWorker {
       effectiveAt: new Date(),
     });
 
-    const eventPayload = {
-      tenant_id: tenantId,
-      playbook_version_id: newVersion.id,
-      playbook_type: playbookType,
-      artifact_kind: critique.artifact_kind,
-      artifact_id: critique.artifact_id,
-      critique_id: critique.critique_id,
-      verdict: critique.verdict,
-      criteria_added: addedCriteria.length,
-      proposal_id: proposal.proposalId,
-      relative_lift: promotion.relativeLift,
-      updated_at: new Date().toISOString(),
-    };
+    // This must happen before the terminal state transition. If the process
+    // crashes after creating the immutable version, its expiring proposal
+    // lease allows a replay to find that version and durably publish this
+    // idempotent event before marking the proposal promoted.
+    await this.enqueuePlaybookUpdated(
+      tenantId,
+      proposal,
+      critique,
+      playbookType,
+      persistedProposal,
+      newVersion.id,
+      addedCriteria.length,
+      relativeLift,
+    );
+    await this.markProposalPromoted(
+      tenantId,
+      persistedProposal,
+      newVersion.id,
+      promotionClaim?.token,
+    );
 
+    return newVersion;
+  }
+
+  private async enqueuePlaybookUpdated(
+    tenantId: string,
+    proposal: PlaybookChangeProposal,
+    critique: CritiqueCompletedPayload,
+    playbookType: PlaybookChangeProposal["playbookType"],
+    persistedProposal: LearningProposalRecord | null,
+    playbookVersionId: string,
+    criteriaAdded: number,
+    relativeLift: number,
+  ): Promise<void> {
     await this.deps.outboxRepository.enqueue({
       tenantId,
       eventType: "learning.playbook.updated.v1",
       idempotencyKey: `playbook-update:${critique.critique_id}`,
-      payload: eventPayload,
+      payload: {
+        tenant_id: tenantId,
+        playbook_version_id: playbookVersionId,
+        playbook_type: playbookType,
+        artifact_kind: critique.artifact_kind,
+        artifact_id: critique.artifact_id,
+        critique_id: critique.critique_id,
+        verdict: critique.verdict,
+        criteria_added: criteriaAdded,
+        proposal_id: proposal.proposalId,
+        ...(persistedProposal
+          ? { learning_proposal_id: persistedProposal.id }
+          : {}),
+        relative_lift: relativeLift,
+        updated_at: new Date().toISOString(),
+      },
     });
+  }
 
-    await this.deps.eventPublisher.publish(
-      tenantScopedSubject(tenantId, "learning.playbook.updated.v1"),
-      eventPayload,
+  private async recordPromotionDecision(
+    tenantId: string,
+    persistedProposal: LearningProposalRecord | null,
+    evaluation: LearningProposalEvaluation,
+    promotion: ReturnType<typeof evaluateLearningProposal>,
+  ): Promise<boolean> {
+    if (!persistedProposal || !this.deps.learningProposalRepository) {
+      return true;
+    }
+
+    const recorded =
+      await this.deps.learningProposalRepository.recordEvaluation(
+        tenantId,
+        persistedProposal.id,
+        {
+          decision: promotion.decision,
+          evidenceSnapshot: {
+            evidence_count: evaluation.evidenceCount,
+            unique_entities: evaluation.uniqueEntities,
+            confidence: evaluation.confidence,
+            baseline_metric: evaluation.baselineMetric,
+            candidate_metric: evaluation.candidateMetric,
+            worst_guardrail_regression: evaluation.worstGuardrailRegression,
+          },
+          evaluationSnapshot: {
+            proposal_id: evaluation.proposalId,
+            risk: evaluation.risk,
+            evidence_count: evaluation.evidenceCount,
+            unique_entities: evaluation.uniqueEntities,
+            confidence: evaluation.confidence,
+            metric_direction: evaluation.metricDirection,
+            baseline_metric: evaluation.baselineMetric,
+            candidate_metric: evaluation.candidateMetric,
+            worst_guardrail_regression: evaluation.worstGuardrailRegression,
+            human_approved: evaluation.humanApproved,
+            relative_lift: promotion.relativeLift,
+          },
+          decisionReasons: promotion.reasons,
+        },
+      );
+
+    // Another delivery may have already persisted a terminal decision. Do not
+    // use a stale in-memory evaluation to create another version.
+    return recorded?.status === "approved";
+  }
+
+  /**
+   * Persist a proposal before anything asks for evidence. This makes a
+   * missing experiment/observation an explicit `awaiting_evidence` state,
+   * rather than an untraceable no-op in a worker log.
+   */
+  private async persistProposal(
+    tenantId: string,
+    proposal: PlaybookChangeProposal,
+    critique: CritiqueCompletedPayload,
+    risk: "low" | "medium" | "high" | "critical",
+    proposedPayload: Record<string, unknown>,
+  ): Promise<LearningProposalRecord | null> {
+    if (!this.deps.learningProposalRepository) return null;
+
+    return this.deps.learningProposalRepository.create(tenantId, {
+      proposalKey: proposal.proposalId,
+      ...(critique.experiment_id
+        ? { experimentId: critique.experiment_id }
+        : {}),
+      targetType: proposal.playbookType,
+      targetId: proposal.artifactId,
+      risk,
+      proposalPayload: proposedPayload,
+      createdBy: `critique:${critique.critique_id}`,
+    });
+  }
+
+  private async markProposalPromoted(
+    tenantId: string,
+    proposal: LearningProposalRecord | null,
+    versionId: string,
+    promotionClaimToken: string | undefined,
+  ): Promise<void> {
+    if (!proposal || !this.deps.learningProposalRepository) return;
+    if (!promotionClaimToken) {
+      throw new Error(
+        `Missing promotion claim for learning proposal ${proposal.id}.`,
+      );
+    }
+    const marked = await this.deps.learningProposalRepository.markPromoted(
+      tenantId,
+      proposal.id,
+      versionId,
+      promotionClaimToken,
     );
-
-    return newVersion;
+    if (!marked) {
+      // A duplicate message can observe an already-promoted proposal only
+      // when it reconciles the same immutable version. A different version is
+      // a fenced-claim conflict and must remain visible for retry/escalation.
+      const current = await this.deps.learningProposalRepository.getById(
+        tenantId,
+        proposal.id,
+      );
+      if (
+        current?.status !== "promoted" ||
+        current.promotedVersionRef !== versionId
+      ) {
+        throw new Error(
+          `Unable to mark learning proposal ${proposal.id} as promoted.`,
+        );
+      }
+    }
   }
 }

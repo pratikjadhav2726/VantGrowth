@@ -1,0 +1,3 @@
+ALTER TABLE "growthos"."learning_proposals" ADD COLUMN "promotion_claim_token" text;--> statement-breakpoint
+ALTER TABLE "growthos"."learning_proposals" ADD COLUMN "promotion_claim_expires_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "learning_proposals_tenant_claimable_idx" ON "growthos"."learning_proposals" USING btree ("tenant_id","status","promotion_claim_expires_at","id") WHERE "growthos"."learning_proposals"."status" = 'approved';
