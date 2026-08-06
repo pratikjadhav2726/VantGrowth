@@ -1,5 +1,4 @@
 import type { OutboxRepository } from "@growthos/db";
-import { tenantScopedSubject } from "@growthos/db";
 import {
   type AttributionRollup,
   type AttributionSignal,
@@ -7,13 +6,8 @@ import {
   attributionSignalSchema,
 } from "./contracts.js";
 
-export interface EventPublisher {
-  publish(subject: string, payload: Record<string, unknown>): Promise<void>;
-}
-
 export interface AttributionWorkerDependencies {
   outboxRepository: OutboxRepository;
-  eventPublisher: EventPublisher;
 }
 
 export const synthesizeAttributionRollup = (
@@ -49,6 +43,7 @@ export class AttributionWorker {
     });
 
     const payload = {
+      tenant_id: rollup.tenantId,
       attribution_id: rollup.attributionId,
       source: rollup.source,
       opportunity_id: rollup.opportunityId,
@@ -67,11 +62,6 @@ export class AttributionWorker {
       idempotencyKey: rollup.dedupeKey,
       payload,
     });
-
-    await this.deps.eventPublisher.publish(
-      tenantScopedSubject(rollup.tenantId, "attribution.rollup.computed.v1"),
-      payload,
-    );
 
     return rollup;
   }

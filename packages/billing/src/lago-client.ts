@@ -20,7 +20,9 @@ import { z } from "zod";
 
 export const PLAN_CODE_MOTION_ACTIVE = "motion_active" as const;
 export const PLAN_CODE_APPROVED_ACTION = "approved_action" as const;
-export type PlanCode = typeof PLAN_CODE_MOTION_ACTIVE | typeof PLAN_CODE_APPROVED_ACTION;
+export type PlanCode =
+  | typeof PLAN_CODE_MOTION_ACTIVE
+  | typeof PLAN_CODE_APPROVED_ACTION;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -157,14 +159,17 @@ export class HttpLagoBillingClient implements BillingClient {
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
       clearTimeout(timer);
-      const json = res.status === 200 || res.status === 201 || res.status === 422
-        ? ((await res.json()) as T)
-        : ({} as T);
+      const json =
+        res.status === 200 || res.status === 201 || res.status === 422
+          ? ((await res.json()) as T)
+          : ({} as T);
       return { status: res.status, json };
     } catch (err) {
       clearTimeout(timer);
       if ((err as Error).name === "AbortError")
-        throw new Error(`Lago request timed out after ${this.timeoutMs}ms: ${path}`);
+        throw new Error(
+          `Lago request timed out after ${this.timeoutMs}ms: ${path}`,
+        );
       throw err;
     }
   }
@@ -201,7 +206,9 @@ export class HttpLagoBillingClient implements BillingClient {
 
     // Lago upserts on external_id — 200 = updated, 201 = created
     if (status !== 200 && status !== 201)
-      throw new Error(`Lago createCustomer failed (${status}): ${JSON.stringify(json)}`);
+      throw new Error(
+        `Lago createCustomer failed (${status}): ${JSON.stringify(json)}`,
+      );
 
     const c = json.customer;
     if (!c?.lago_id)
@@ -247,7 +254,9 @@ export class HttpLagoBillingClient implements BillingClient {
     );
 
     if (status !== 200 && status !== 201)
-      throw new Error(`Lago assignPlan failed (${status}): ${JSON.stringify(json)}`);
+      throw new Error(
+        `Lago assignPlan failed (${status}): ${JSON.stringify(json)}`,
+      );
 
     const s = json.subscription;
     if (!s?.lago_id)
@@ -290,7 +299,9 @@ export class HttpLagoBillingClient implements BillingClient {
       `/api/v1/customers/${externalId}`,
     );
     if (status === 200 || status === 204 || status === 404) return;
-    throw new Error(`Lago deleteCustomer ${externalId} failed (${status}): ${JSON.stringify(json)}`);
+    throw new Error(
+      `Lago deleteCustomer ${externalId} failed (${status}): ${JSON.stringify(json)}`,
+    );
   }
 }
 
@@ -299,12 +310,16 @@ export class HttpLagoBillingClient implements BillingClient {
 // ---------------------------------------------------------------------------
 
 export class StubBillingClient implements BillingClient {
-  readonly createCustomerCalls: Parameters<BillingClient["createCustomer"]>[0][] = [];
+  readonly createCustomerCalls: Parameters<
+    BillingClient["createCustomer"]
+  >[0][] = [];
   readonly assignPlanCalls: Parameters<BillingClient["assignPlan"]>[0][] = [];
   readonly recordEventCalls: Parameters<BillingClient["recordEvent"]>[0][] = [];
   readonly deleteCustomerCalls: string[] = [];
 
-  async createCustomer(params: Parameters<BillingClient["createCustomer"]>[0]): Promise<LagoCustomer> {
+  async createCustomer(
+    params: Parameters<BillingClient["createCustomer"]>[0],
+  ): Promise<LagoCustomer> {
     this.createCustomerCalls.push(params);
     return {
       lagoId: `lago-customer-${params.externalId}`,
@@ -316,7 +331,9 @@ export class StubBillingClient implements BillingClient {
     };
   }
 
-  async assignPlan(params: Parameters<BillingClient["assignPlan"]>[0]): Promise<LagoSubscription> {
+  async assignPlan(
+    params: Parameters<BillingClient["assignPlan"]>[0],
+  ): Promise<LagoSubscription> {
     this.assignPlanCalls.push(params);
     return {
       lagoId: `lago-sub-${params.subscriptionExternalId}`,
@@ -328,7 +345,9 @@ export class StubBillingClient implements BillingClient {
     };
   }
 
-  async recordEvent(params: Parameters<BillingClient["recordEvent"]>[0]): Promise<void> {
+  async recordEvent(
+    params: Parameters<BillingClient["recordEvent"]>[0],
+  ): Promise<void> {
     this.recordEventCalls.push(params);
   }
 

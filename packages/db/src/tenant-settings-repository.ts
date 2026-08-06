@@ -10,7 +10,7 @@ import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { tenantIdSchema } from "./contracts.js";
 import type { GrowthOsDb } from "./db.js";
-import { tenantSettings, type TenantSettingsRow } from "./schema.js";
+import { type TenantSettingsRow, tenantSettings } from "./schema.js";
 
 type TxClient = Parameters<Parameters<GrowthOsDb["transaction"]>[0]>[0];
 

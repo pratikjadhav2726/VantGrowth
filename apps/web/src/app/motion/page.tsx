@@ -7,7 +7,10 @@
 
 import { MotionScoreForm } from "@/components/motion-score-form";
 import { StatusBadge } from "@/components/status-badge";
+import { AGENTS } from "@/lib/agent-catalog";
 import { type MotionOverview, getMotionOverview } from "@/lib/api-client";
+import { motionDisplay } from "@/lib/motion-catalog";
+import Link from "next/link";
 
 const DEV_TENANT_ID =
   process.env.GROWTHOS_DEV_TENANT_ID ?? "00000000-0000-0000-0001-000000000001";
@@ -174,42 +177,92 @@ export default async function MotionPage() {
         </div>
       )}
 
+      {/* ── How scoring works (plain) ───────────────────────────────── */}
+      <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50/60 p-4 text-sm text-gray-600">
+        Every motion is scored 0–100 for{" "}
+        <span className="font-medium text-gray-800">fit</span> using your GTM
+        signals — deal size, sales-cycle length, engagement data, content
+        capacity and market demand. The top two become{" "}
+        <span className="font-medium text-gray-800">Primary</span>, the next two{" "}
+        <span className="font-medium text-gray-800">Secondary</span>; the rest
+        are watched or paused.
+      </div>
+
       {/* ── Score grid ──────────────────────────────────────────────── */}
       <div className="grid gap-4 sm:grid-cols-2">
-        {motions.map((motion) => (
-          <div
-            key={motion.key}
-            className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-semibold text-gray-900">
-                    {motion.label}
-                  </h2>
-                  {tierBadge(motion.tier)}
+        {motions.map((motion) => {
+          const meta = motionDisplay(motion.key);
+          return (
+            <div
+              key={motion.key}
+              id={motion.key}
+              className="scroll-mt-24 rounded-xl border border-gray-200 bg-white p-6 shadow-sm target:ring-2 target:ring-brand-400"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">{meta.glyph}</span>
+                    <h2 className="text-sm font-semibold text-gray-900">
+                      {meta.name}
+                    </h2>
+                    {tierBadge(motion.tier)}
+                  </div>
                 </div>
-                <p className="mt-1 text-xs text-gray-500">
-                  {motion.description}
+                <div className="shrink-0 text-right">
+                  <p className="text-3xl font-bold tabular-nums text-gray-900">
+                    {Math.round(motion.score * 100)}
+                  </p>
+                  <p className="text-xs text-gray-400">/ 100 fit</p>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
+                  <div
+                    className={`h-full rounded-full transition-all ${barColor(motion.tier)}`}
+                    style={{ width: `${motion.score * 100}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Why it scores this way */}
+              <div className="mt-4">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                  Why this score
+                </p>
+                <p className="mt-1 text-sm text-gray-600">{meta.why}</p>
+                <p className="mt-1.5 text-xs text-gray-400">
+                  Scored from: {meta.inputs}
                 </p>
               </div>
-              <div className="shrink-0 text-right">
-                <p className="text-3xl font-bold tabular-nums text-gray-900">
-                  {Math.round(motion.score * 100)}
+
+              {/* What it drives */}
+              <div className="mt-4 border-t border-gray-100 pt-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                  Drives
                 </p>
-                <p className="text-xs text-gray-400">/ 100</p>
+                <p className="mt-1 text-sm text-gray-700">{meta.drives}</p>
+                {meta.agents.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {meta.agents.map((id) => {
+                      const a = AGENTS.find((x) => x.id === id);
+                      if (!a) return null;
+                      return (
+                        <Link
+                          key={id}
+                          href={`/agents/${id}`}
+                          className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600 hover:bg-brand-50 hover:text-brand-700"
+                        >
+                          {a.glyph} {a.name}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
-            <div className="mt-4">
-              <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-                <div
-                  className={`h-full rounded-full transition-all ${barColor(motion.tier)}`}
-                  style={{ width: `${motion.score * 100}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* ── Stack configuration (live data only) ────────────────────── */}

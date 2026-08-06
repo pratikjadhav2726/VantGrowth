@@ -18,6 +18,12 @@ const API_BASE =
   process.env.NEXT_PUBLIC_GROWTHOS_API_BASE_URL ??
   "http://localhost:3000";
 
+// Server-side service token used to authenticate against the GrowthOS API's
+// token-protected mutation routes (e.g. POST /v1/motions/score). Only available
+// in server components / server actions — never exposed to the browser because
+// it is intentionally NOT a NEXT_PUBLIC_ variable.
+const SERVER_SERVICE_TOKEN = process.env.GROWTHOS_API_SERVICE_TOKEN;
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -48,6 +54,11 @@ async function apiFetch<T>(
     headers: {
       "Content-Type": "application/json",
       "X-Tenant-Id": tenantId,
+      // Authenticate token-protected mutation routes by default. An explicit
+      // Authorization header (e.g. patchSettings) still overrides this.
+      ...(SERVER_SERVICE_TOKEN
+        ? { Authorization: `Bearer ${SERVER_SERVICE_TOKEN}` }
+        : {}),
       ...(fetchOptions.headers as Record<string, string> | undefined),
     },
   });
@@ -291,6 +302,158 @@ export const getWeeklyDigest = (tenantId: string) =>
   apiFetch("/v1/digest/weekly", tenantId, { schema: weeklyMetricsSchema });
 
 // ---------------------------------------------------------------------------
+// Adaptive control plane
+// ---------------------------------------------------------------------------
+
+const controlPlaneDataSourceStatusSchema = z.enum([
+  "available",
+  "not_configured",
+  "unavailable",
+]);
+
+const controlPlaneHealthStateSchema = z.enum([
+  "healthy",
+  "degraded",
+  "recovering",
+  "quarantined",
+  "unknown",
+]);
+
+export const controlPlaneSummarySchema = z.object({
+  tenantId: z.string(),
+  generatedAt: z.string(),
+  partial: z.boolean(),
+  dataSources: z.object({
+    signals: controlPlaneDataSourceStatusSchema,
+    outbox: controlPlaneDataSourceStatusSchema,
+    approvals: controlPlaneDataSourceStatusSchema,
+    motion: controlPlaneDataSourceStatusSchema,
+    componentHealth: controlPlaneDataSourceStatusSchema,
+    incidents: controlPlaneDataSourceStatusSchema,
+    experiments: controlPlaneDataSourceStatusSchema,
+    learningProposals: controlPlaneDataSourceStatusSchema,
+  }),
+  signals: z.object({
+    today: z.number().int().nonnegative(),
+    windowStart: z.string(),
+  }),
+  approvals: z.object({
+    pending: z.number().int().nonnegative(),
+    pendingIsLowerBound: z.boolean(),
+    decisionScanTruncated: z.boolean(),
+    approvedLastSevenDays: z.number().int().nonnegative(),
+    rejectedLastSevenDays: z.number().int().nonnegative(),
+  }),
+  execution: z.object({
+    pendingOutboxEvents: z.number().int().nonnegative(),
+    pendingOutboxEventsIsLowerBound: z.boolean(),
+  }),
+  motion: z.object({
+    primaryMotions: z.array(z.string()),
+    secondaryMotions: z.array(z.string()),
+    scorerVersion: z.string().nullable(),
+    scoredAt: z.string().nullable(),
+  }),
+  health: z.object({
+    overall: controlPlaneHealthStateSchema,
+    overallMayBeIncomplete: z.boolean(),
+    components: z.number().int().nonnegative(),
+    componentsIsLowerBound: z.boolean(),
+    degraded: z.number().int().nonnegative(),
+    recovering: z.number().int().nonnegative(),
+    quarantined: z.number().int().nonnegative(),
+    externalActionsBlocked: z.number().int().nonnegative(),
+  }),
+  incidents: z.object({
+    open: z.number().int().nonnegative(),
+    openIsLowerBound: z.boolean(),
+    criticalOpen: z.number().int().nonnegative(),
+    criticalOpenIsLowerBound: z.boolean(),
+  }),
+  experiments: z.object({
+    total: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    paused: z.number().int().nonnegative(),
+    concluded: z.number().int().nonnegative(),
+    promoted: z.number().int().nonnegative(),
+    rolledBack: z.number().int().nonnegative(),
+  }),
+  learning: z.object({
+    total: z.number().int().nonnegative(),
+    awaitingEvidence: z.number().int().nonnegative(),
+    evaluating: z.number().int().nonnegative(),
+    requiresApproval: z.number().int().nonnegative(),
+    promoted: z.number().int().nonnegative(),
+    rolledBack: z.number().int().nonnegative(),
+  }),
+});
+export type ControlPlaneSummary = z.infer<typeof controlPlaneSummarySchema>;
+
+export const componentHealthItemSchema = z.object({
+  componentId: z.string(),
+  state: controlPlaneHealthStateSchema.exclude(["unknown"]),
+  action: z.string(),
+  allowExternalActions: z.boolean(),
+  reasons: z.array(z.string()),
+  observedAt: z.string(),
+});
+export type ComponentHealthItem = z.infer<typeof componentHealthItemSchema>;
+
+export const controlPlaneHealthResponseSchema = z.object({
+  tenantId: z.string(),
+  generatedAt: z.string(),
+  overall: controlPlaneHealthStateSchema,
+  items: z.array(componentHealthItemSchema),
+  total: z.number().int().nonnegative(),
+  totalIsLowerBound: z.boolean(),
+});
+export type ControlPlaneHealthResponse = z.infer<
+  typeof controlPlaneHealthResponseSchema
+>;
+
+export const incidentItemSchema = z.object({
+  id: z.string(),
+  componentId: z.string(),
+  severity: z.enum(["low", "medium", "high", "critical"]),
+  status: z.string(),
+  title: z.string(),
+  summary: z.string(),
+  openedAt: z.string(),
+  resolvedAt: z.string().nullable(),
+});
+export type IncidentItem = z.infer<typeof incidentItemSchema>;
+
+export const controlPlaneIncidentResponseSchema = z.object({
+  tenantId: z.string(),
+  generatedAt: z.string(),
+  items: z.array(incidentItemSchema),
+  total: z.number().int().nonnegative(),
+  totalIsLowerBound: z.boolean(),
+  open: z.number().int().nonnegative(),
+});
+export type ControlPlaneIncidentResponse = z.infer<
+  typeof controlPlaneIncidentResponseSchema
+>;
+
+export const getControlPlaneSummary = (tenantId: string) =>
+  apiFetch("/v1/control-plane/summary", tenantId, {
+    cache: "no-store",
+    schema: controlPlaneSummarySchema,
+  });
+
+export const getControlPlaneHealth = (tenantId: string, limit = 100) =>
+  apiFetch(`/v1/control-plane/health?limit=${limit}`, tenantId, {
+    cache: "no-store",
+    schema: controlPlaneHealthResponseSchema,
+  });
+
+export const listControlPlaneIncidents = (tenantId: string, limit = 50) =>
+  apiFetch(`/v1/control-plane/incidents?limit=${limit}`, tenantId, {
+    cache: "no-store",
+    schema: controlPlaneIncidentResponseSchema,
+  });
+
+// ---------------------------------------------------------------------------
 // Tenant settings
 // ---------------------------------------------------------------------------
 
@@ -321,7 +484,9 @@ export const sendFounderDigest = (
   apiFetch("/v1/digest/send", tenantId, {
     method: "POST",
     body: JSON.stringify({
-      ...(options?.recipientEmail ? { recipientEmail: options.recipientEmail } : {}),
+      ...(options?.recipientEmail
+        ? { recipientEmail: options.recipientEmail }
+        : {}),
     }),
     schema: sendDigestResponseSchema,
   });

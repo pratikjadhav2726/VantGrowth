@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import type { EnqueueOutboxEvent, StoredOutboxEvent } from "./contracts.js";
 import {
   enqueueOutboxEventSchema,
@@ -154,6 +154,37 @@ export class PostgresOutboxRepository implements OutboxRepository {
           ),
         )
         .orderBy(asc(eventOutbox.id))
+        .limit(limit);
+
+      return rows.map(mapRow);
+    });
+  }
+
+  async listByEventType(
+    tenantId: string,
+    eventType: string,
+    limit: number,
+  ): Promise<StoredOutboxEvent[]> {
+    const parsedTenantId = tenantIdSchema.parse(tenantId);
+    const tenantContext: TenantContext = {
+      tenantId: parsedTenantId,
+      ...(this.context.actorId ? { actorId: this.context.actorId } : {}),
+      actorKind: this.context.actorKind ?? "system",
+    };
+
+    return this.db.transaction(async (tx) => {
+      await setTenantContext(tx, tenantContext);
+
+      const rows = await tx
+        .select()
+        .from(eventOutbox)
+        .where(
+          and(
+            eq(eventOutbox.tenantId, parsedTenantId),
+            eq(eventOutbox.eventType, eventType),
+          ),
+        )
+        .orderBy(desc(eventOutbox.createdAt), desc(eventOutbox.id))
         .limit(limit);
 
       return rows.map(mapRow);

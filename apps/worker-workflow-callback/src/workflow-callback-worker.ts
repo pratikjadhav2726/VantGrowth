@@ -1,13 +1,13 @@
 /**
  * WorkflowCallbackWorker
  *
- * Processes tenant provisioning workflow callbacks arriving via NATS.
+ * Processes tenant provisioning workflow callbacks arriving via JetStream.
  * Supports two execution paths:
  *
  *   1. Direct (orchestrator) path — preferred for Phase 1 local runs.
  *      Enabled by injecting `provisioningClients` into the constructor.
  *      The worker creates a TenantProvisioningOrchestrator per request,
- *      wires in an OutboxProvisioningProgressReporter, runs the 5 idempotent
+ *      wires in an OutboxProvisioningProgressReporter, runs the 7 idempotent
  *      provisioning steps, and emits the terminal event when complete.
  *
  *   2. Restate verification path — production path for when Restate
@@ -19,6 +19,7 @@
  * the worker returns immediately without re-emitting events.
  */
 
+import type { BillingClient } from "@growthos/billing";
 import {
   type GiteaProvisioningClient,
   type MinioProvisioningClient,
@@ -32,16 +33,10 @@ import {
   createTenantProvisioningProgressOutboxCommand,
   tenantProvisioningWorkflowInputSchema,
 } from "@growthos/core";
-import type { ZitadelClient } from "@growthos/identity";
-import type { BillingClient } from "@growthos/billing";
 import type { OutboxRepository, WorkflowRunRepository } from "@growthos/db";
-import { tenantScopedSubject } from "@growthos/db";
+import type { ZitadelClient } from "@growthos/identity";
 import type { TenantSecretsService } from "@growthos/secrets";
 import { OutboxProvisioningProgressReporter } from "./outbox-progress-reporter.js";
-
-export interface EventPublisher {
-  publish(subject: string, payload: Record<string, unknown>): Promise<void>;
-}
 
 export interface RuntimeStateVerifier {
   getTenantProvisioningRuntimeState(input: {
@@ -63,7 +58,6 @@ export interface ProvisioningClients {
 export interface WorkflowCallbackWorkerDependencies {
   outboxRepository: OutboxRepository;
   workflowRunRepository: WorkflowRunRepository;
-  eventPublisher: EventPublisher;
   runtimeStateVerifier: RuntimeStateVerifier;
   /**
    * When provided the worker executes provisioning steps directly without
@@ -123,7 +117,6 @@ export class WorkflowCallbackWorker {
 
     const reporter = new OutboxProvisioningProgressReporter(
       this.deps.outboxRepository,
-      this.deps.eventPublisher,
       {
         tenantId: request.tenantId,
         workflowId: request.workflowId,
@@ -139,13 +132,13 @@ export class WorkflowCallbackWorker {
       progress: reporter,
     });
 
+    let result: Awaited<ReturnType<TenantProvisioningOrchestrator["run"]>>;
     try {
-      const result = await orchestrator.run(request);
+      result = await orchestrator.run(request);
 
       // ── Step 6 (optional): write well-known secrets to the secrets store ──
-      // Sources from matching env vars; silently skips missing vars.  This
-      // step is idempotent: re-provisioning the same tenant overwrites
-      // existing secrets with the current env values.
+      // Sources from matching env vars; silently skips missing vars. This is a
+      // provisioning failure domain, unlike the durable-state writes below.
       if (this.deps.tenantSecretsService) {
         await this.deps.tenantSecretsService.provisionTenant(request.tenantId, {
           openai_api_key: process.env.TENANT_OPENAI_API_KEY ?? "",
@@ -156,47 +149,6 @@ export class WorkflowCallbackWorker {
           nats_credentials: process.env.NATS_CREDENTIALS ?? "",
         });
       }
-
-      const callbackId = `orchestrator:${request.workflowId}:completed`;
-      const completedCommand = createTenantProvisioningCompletedOutboxCommand({
-        ...request,
-        callbackId,
-        callbackType: "completed",
-        runtimeRunId: undefined,
-      });
-      await this.deps.outboxRepository.enqueue(completedCommand);
-      await this.deps.eventPublisher.publish(
-        tenantScopedSubject(
-          request.tenantId,
-          "workflow.tenant_provisioning.completed.v1",
-        ),
-        completedCommand.payload,
-      );
-      await this.deps.workflowRunRepository.transitionState(
-        request.tenantId,
-        request.workflowId,
-        "in_progress",
-        "completed",
-      );
-
-      // Build synthetic runtime state from orchestrator result.
-      const history: TenantProvisioningRuntimeHistoryEvent[] = result.steps.map(
-        (s) => ({
-          step: s.step,
-          message: s.skipped
-            ? `${s.step} skipped (already exists)`
-            : `${s.step} completed`,
-          percent: undefined,
-          occurredAt: result.completedAt,
-        }),
-      );
-
-      return {
-        workflowId: result.workflowId,
-        tenantId: result.tenantId,
-        state: "completed",
-        history,
-      };
     } catch (err) {
       const failureMessage =
         err instanceof Error ? err.message : "Unknown provisioning failure";
@@ -212,13 +164,6 @@ export class WorkflowCallbackWorker {
         failureMessage,
       });
       await this.deps.outboxRepository.enqueue(failedCommand);
-      await this.deps.eventPublisher.publish(
-        tenantScopedSubject(
-          request.tenantId,
-          "workflow.tenant_provisioning.failed.v1",
-        ),
-        failedCommand.payload,
-      );
       await this.deps.workflowRunRepository.transitionState(
         request.tenantId,
         request.workflowId,
@@ -236,6 +181,43 @@ export class WorkflowCallbackWorker {
         history: [],
       };
     }
+
+    // Any error below must reach the durable consumer so it can retry rather
+    // than incorrectly converting a transient database outage into a terminal
+    // provisioning failure.
+    const callbackId = `orchestrator:${request.workflowId}:completed`;
+    const completedCommand = createTenantProvisioningCompletedOutboxCommand({
+      ...request,
+      callbackId,
+      callbackType: "completed",
+      runtimeRunId: undefined,
+    });
+    await this.deps.outboxRepository.enqueue(completedCommand);
+    await this.deps.workflowRunRepository.transitionState(
+      request.tenantId,
+      request.workflowId,
+      "in_progress",
+      "completed",
+    );
+
+    // Build synthetic runtime state from orchestrator result.
+    const history: TenantProvisioningRuntimeHistoryEvent[] = result.steps.map(
+      (step) => ({
+        step: step.step,
+        message: step.skipped
+          ? `${step.step} skipped (already exists)`
+          : `${step.step} completed`,
+        percent: undefined,
+        occurredAt: result.completedAt,
+      }),
+    );
+
+    return {
+      workflowId: result.workflowId,
+      tenantId: result.tenantId,
+      state: "completed",
+      history,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -265,13 +247,6 @@ export class WorkflowCallbackWorker {
       progressPercent: event.percent,
     });
     await this.deps.outboxRepository.enqueue(command);
-    await this.deps.eventPublisher.publish(
-      tenantScopedSubject(
-        request.tenantId,
-        "workflow.tenant_provisioning.progress.v1",
-      ),
-      command.payload,
-    );
   }
 
   // ---------------------------------------------------------------------------
@@ -338,13 +313,6 @@ export class WorkflowCallbackWorker {
         runtimeRunId: runtimeState.runtimeRunId,
       });
       await this.deps.outboxRepository.enqueue(completedCommand);
-      await this.deps.eventPublisher.publish(
-        tenantScopedSubject(
-          request.tenantId,
-          "workflow.tenant_provisioning.completed.v1",
-        ),
-        completedCommand.payload,
-      );
       await this.deps.workflowRunRepository.transitionState(
         request.tenantId,
         request.workflowId,
@@ -364,13 +332,6 @@ export class WorkflowCallbackWorker {
         failureMessage: runtimeState.failureMessage,
       });
       await this.deps.outboxRepository.enqueue(failedCommand);
-      await this.deps.eventPublisher.publish(
-        tenantScopedSubject(
-          request.tenantId,
-          "workflow.tenant_provisioning.failed.v1",
-        ),
-        failedCommand.payload,
-      );
       await this.deps.workflowRunRepository.transitionState(
         request.tenantId,
         request.workflowId,

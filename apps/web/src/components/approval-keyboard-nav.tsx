@@ -78,9 +78,13 @@ export function ApprovalKeyboardNav({
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         if (selectedIndex !== null) {
           const item = getItem(selectedIndex);
-          item?.querySelector<HTMLFormElement>("form")?.requestSubmit(
-            item?.querySelector<HTMLButtonElement>('button[name="action"][value="approved"]') ?? undefined,
-          );
+          item
+            ?.querySelector<HTMLFormElement>("form")
+            ?.requestSubmit(
+              item?.querySelector<HTMLButtonElement>(
+                'button[name="action"][value="approved"]',
+              ) ?? undefined,
+            );
         }
         return;
       }
@@ -135,7 +139,14 @@ export function ApprovalKeyboardNav({
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [itemCount, selectedIndex, getItem, scrollIntoView, clickAction, focusNote]);
+  }, [
+    itemCount,
+    selectedIndex,
+    getItem,
+    scrollIntoView,
+    clickAction,
+    focusNote,
+  ]);
 
   return (
     <div ref={containerRef} className="relative">

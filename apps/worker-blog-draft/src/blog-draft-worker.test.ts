@@ -103,6 +103,12 @@ describe("generateBlogDraft", () => {
     expect(draft.tenant_id).toBe(TENANT_ID);
   });
 
+  it("carries experiment lineage from the content brief", () => {
+    const experimentId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const draft = generateBlogDraft(makeBrief({ experiment_id: experimentId }));
+    expect(draft.experiment_id).toBe(experimentId);
+  });
+
   it("body_markdown contains all section titles as headings", () => {
     const brief = makeBrief();
     const draft = generateBlogDraft(brief);
@@ -189,7 +195,7 @@ describe("generateBlogDraft", () => {
 // ---------------------------------------------------------------------------
 
 describe("BlogDraftWorker", () => {
-  it("emits blog_draft.v1 to outbox and tenant-scoped NATS subject", async () => {
+  it("emits blog_draft.v1 to the durable outbox", async () => {
     const publishFn = vi.fn(async () => undefined);
     const { worker, outboxRepository } = makeWorker(publishFn);
 
@@ -201,11 +207,7 @@ describe("BlogDraftWorker", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.eventType).toBe("blog_draft.v1");
 
-    expect(publishFn).toHaveBeenCalledOnce();
-    expect(publishFn).toHaveBeenCalledWith(
-      `t.${TENANT_ID}.blog_draft.v1`,
-      expect.objectContaining({ schema_version: "blog_draft.v1" }),
-    );
+    expect(publishFn).not.toHaveBeenCalled();
   });
 
   it("is idempotent: replayed brief produces no new outbox entries", async () => {

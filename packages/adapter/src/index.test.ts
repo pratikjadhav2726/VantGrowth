@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  GrowthosNativeAdapter,
   type PaperclipAgentCreateInput,
   PaperclipClient,
   type PaperclipCompanyCreateInput,
   type PaperclipIssueCreateInput,
   paperclipConfigFromEnv,
+  paperclipWorkReadyEventType,
 } from "./index.js";
 
 describe("paperclipConfigFromEnv", () => {
@@ -94,5 +96,73 @@ describe("PaperclipClient", () => {
     expect(issue.identifier).toBe("LAT-1");
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("requeues a failed handoff without invoking the unassigning release endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: "iss_1",
+          identifier: "ACME-1",
+          title: "Prepare account brief",
+          status: "todo",
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+    const client = new PaperclipClient(
+      {
+        baseUrl: "http://localhost:3100",
+        serviceToken: "svc_token",
+        timeoutMs: 1000,
+      },
+      fetchMock,
+    );
+
+    await client.requeueIssue("iss_1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3100/api/issues/iss_1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ status: "todo" }),
+      }),
+    );
+  });
+});
+
+describe("GrowthosNativeAdapter", () => {
+  it("persists a typed, idempotent work-ready handoff", async () => {
+    const enqueueOutbox = vi.fn(async () => ({ trackingId: "outbox-42" }));
+    const adapter = new GrowthosNativeAdapter({ enqueueOutbox });
+
+    const result = await adapter.emitWorkReady({
+      tenantId: "11111111-1111-4111-8111-111111111111",
+      paperclipCompanyId: "cmp_1",
+      paperclipRunId: "run_1",
+      agentId: "agt_1",
+      issueId: "iss_1",
+      issueIdentifier: "ACME-1",
+      issueTitle: "Prepare account brief",
+    });
+
+    expect(result).toEqual({ trackingId: "outbox-42" });
+    expect(enqueueOutbox).toHaveBeenCalledWith({
+      tenantId: "11111111-1111-4111-8111-111111111111",
+      eventType: paperclipWorkReadyEventType,
+      idempotencyKey: "run_1:work-ready",
+      payload: {
+        tenant_id: "11111111-1111-4111-8111-111111111111",
+        paperclip_company_id: "cmp_1",
+        paperclip_run_id: "run_1",
+        paperclip_agent_id: "agt_1",
+        paperclip_issue_id: "iss_1",
+        paperclip_issue_identifier: "ACME-1",
+        paperclip_issue_title: "Prepare account brief",
+      },
+    });
   });
 });

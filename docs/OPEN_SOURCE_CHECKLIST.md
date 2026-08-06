@@ -4,34 +4,34 @@ Use this checklist before announcing or sharing the repository.
 
 ## Project metadata
 
-- [ ] `README.md` clearly explains purpose and setup
-- [ ] `LICENSE` exists and is accurate
-- [ ] `CONTRIBUTING.md` exists
-- [ ] `CODE_OF_CONDUCT.md` exists
-- [ ] `SECURITY.md` exists
+- [x] `README.md` clearly explains purpose and setup
+- [x] `LICENSE` exists and is accurate
+- [x] `CONTRIBUTING.md` exists
+- [x] `CODE_OF_CONDUCT.md` exists
+- [x] `SECURITY.md` exists
 
 ## Repository hygiene
 
-- [ ] `.gitignore` excludes local and generated artifacts
-- [ ] no secrets or tokens in tracked files
-- [ ] sample env config is in `.env.example`
-- [ ] generated build folders are not committed
+- [x] `.gitignore` excludes local and generated artifacts
+- [x] no secrets or tokens in tracked files
+- [x] sample env config is in `.env.example`
+- [x] generated build folders are not committed
 
 ## Developer experience
 
 - [ ] quick-start commands work on clean machine
 - [ ] Docker demo flow works end to end
-- [ ] basic troubleshooting docs exist
-- [ ] key commands are documented (`dev`, `test`, `typecheck`, migrations)
+- [x] basic troubleshooting docs exist
+- [x] key commands are documented (`dev`, `test`, `typecheck`, migrations)
 
 ## Product clarity
 
-- [ ] user guide explains login + first-run flow
-- [ ] API surface and key pages are documented
-- [ ] integration status (Paperclip optional/strict) is documented
+- [x] user guide explains login + first-run flow
+- [x] API surface and key pages are documented
+- [x] integration status (Paperclip optional/strict) is documented
 
 ## Release readiness
 
 - [ ] CI passes on default branch
-- [ ] known limitations are documented
-- [ ] issue templates and PR template are added (optional but recommended)
+- [x] known limitations are documented
+- [x] issue templates and PR template are added

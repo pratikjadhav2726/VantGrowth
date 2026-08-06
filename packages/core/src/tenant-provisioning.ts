@@ -23,10 +23,10 @@
  *     inside a `ctx.run(...)` block — no Restate SDK leaks into this module.
  */
 
-import { z } from "zod";
-import type { ZitadelClient, ZitadelOrg } from "@growthos/identity";
 import type { BillingClient, PlanCode } from "@growthos/billing";
 import { PLAN_CODE_MOTION_ACTIVE } from "@growthos/billing";
+import type { ZitadelClient, ZitadelOrg } from "@growthos/identity";
+import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Input / output schemas
@@ -335,7 +335,11 @@ export class TenantProvisioningOrchestrator {
     steps.push({
       step: "lago_customer",
       skipped: false,
-      output: { lagoCustomerId: lagoCustomer.lagoId, subscriptionId: lagoSub.lagoId, planCode: lagoSub.planCode },
+      output: {
+        lagoCustomerId: lagoCustomer.lagoId,
+        subscriptionId: lagoSub.lagoId,
+        planCode: lagoSub.planCode,
+      },
     });
 
     // ── Step 6: Seed FOUNDER.md ────────────────────────────────────────────

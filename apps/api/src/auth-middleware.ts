@@ -30,9 +30,8 @@ export interface ApiAuthConfig {
  * Permissive (no-op) when `serviceToken` is null so that unit tests and local
  * dev environments work without configuration.
  */
-export const createApiTokenMiddleware = (
-  config: ApiAuthConfig,
-): MiddlewareHandler =>
+export const createApiTokenMiddleware =
+  (config: ApiAuthConfig): MiddlewareHandler =>
   async (c, next) => {
     if (!config.serviceToken) {
       return next();

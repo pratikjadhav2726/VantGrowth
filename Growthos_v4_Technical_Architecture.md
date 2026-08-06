@@ -1,6 +1,6 @@
 # GrowthOS v4 — Technical Architecture
 **Motion-First Startup Operating System for GTM, Revenue, and Growth Execution**
-**Companion to:** `Growthos_v4.md` (strategic spec), `paperclip_guide.md` (forked control plane), `SmarterMCP_guide.md` (deployed tool gateway)
+**Companion to:** `Growthos_v4.md` (strategic spec), `paperclip_guide.md` (forked control plane), n8n connector documentation, `SmarterMCP_guide.md` (disabled legacy reference)
 **Audience:** Staff agentic-AI / platform engineers, infra leads, product architects
 **Status:** Implementation-ready technical blueprint
 
@@ -11,7 +11,7 @@
 `Growthos_v4.md` is the *what and why*. This document is the *how*. Every design choice here is made under three constraints that are not negotiable:
 
 1. **We are not building an orchestration kernel.** Paperclip (forked) is that kernel. We harden it; we do not replace it. Every hour spent re-implementing org charts, heartbeats, approvals, or audit trails is an hour not spent on the GTM domain that is the actual moat.
-2. **We are not building an MCP runtime.** SmarterMCP (deployed as a separate multi-tenant service) is that runtime. All tool calls leaving an agent go through it. No agent talks to an external SaaS directly.
+2. **We are not building one-off SaaS connectors.** n8n is the active connector fabric. GrowthOS integrates once with n8n through signed inbound signals and approved outbound dispatch; n8n owns downstream SaaS credentials, workflows, retries, and per-tool setup. SmarterMCP remains a disabled legacy option, not an active dependency.
 3. **The domain layer is where the product lives.** Motion scoring, signal routing, learning, confidence, warmth, GEO, experiments, and attribution are *ours* to build and own. They are also what compounds.
 
 If an architectural decision violates any of these three rules, it is wrong — even if it looks clean on a whiteboard.
@@ -55,20 +55,20 @@ If an architectural decision violates any of these three rules, it is wrong — 
     │    ┌───────────────────────┴───────────────────────┐
     │    │                                               │
 ┌───▼────▼────────────┐                         ┌────────▼───────────────┐
-│ BullMQ + Redis      │                         │ SmarterMCP Gateway     │
+│ BullMQ + Redis      │                         │ n8n Connector Fabric             │
 │ · heartbeat queue   │                         │ (separate service)     │
-│ · signal router q.  │                         │ · tenant isolation     │
-│ · critique q.       │                         │ · tool entitlements    │
-│ · learning q.       │                         │ · DLP / filters        │
-│ · attribution q.    │                         │ · proxy_search/filter  │
-│ · delayed tasks     │                         │ · response cache       │
-│ · dead-letter q.    │                         │ · per-tenant quotas    │
+│ · signal router q.  │                         │ · SaaS credentials     │
+│ · critique q.       │                         │ · workflow retries     │
+│ · learning q.       │                         │ · webhook normalize    │
+│ · attribution q.    │                         │ · approved dispatch    │
+│ · delayed tasks     │                         │ · execution metadata   │
+│ · dead-letter q.    │                         │ · vendor rate limits   │
 └───┬─────────────────┘                         └─────────┬──────────────┘
     │                                                     │
-    │  (worker pools consume from queues)                 │ MCP/HTTPS
+    │  (worker pools consume from queues)                 │ HTTPS webhooks/API
     │                                                     │
 ┌───▼──────────────────────────────────────────┐    ┌─────▼──────────────────────────┐
-│ Postgres (Supabase or RDS)                   │    │ Upstream MCP servers / SaaS    │
+│ Postgres (Supabase or RDS)                   │    │ External SaaS                  │
 │ · Paperclip schema (RLS enabled — v3 work)   │    │ CRM (HubSpot/Salesforce)       │
 │ · GrowthOS domain schema (RLS enabled)       │    │ GA4 / Mixpanel / Segment       │
 │ · partitioned activity_log, cost_events      │    │ LinkedIn / X / Slack / Reddit  │
@@ -95,7 +95,7 @@ If an architectural decision violates any of these three rules, it is wrong — 
 | `worker-geo` | Periodic AI-search citation probes | Node/TS | horizontal, rate-limited |
 | `outbox-relay` | Reads committed `event_outbox` rows and fans out via Redis Pub/Sub for live UI + WS clients (§3.6) | Node/TS | 1 leader (Redis lock), N followers |
 | `ws-gateway` | Founder-facing WebSocket + SSE endpoint; subscribes to Redis Pub/Sub, maintains per-connection state (co-located with `api` in v1, split out at scale) | Node/TS | stateless, horizontal, any-instance-any-client |
-| `smartermcp-gateway` | Tool gateway (SmarterMCP; treat as external service) | per vendor | separate deployment |
+| `n8n` | Single connector fabric for downstream SaaS workflows | n8n deployment model | separate deployment |
 | `postgres` | System of record | Postgres 16 + pgvector | primary + read replicas |
 | `redis` | Queues, locks, cache, signal stream | Redis 7 | Sentinel/Cluster |
 | `object-store` | Attachments, exports, large evidence bundles | S3-compatible | managed |
@@ -123,17 +123,17 @@ The v3 bullet list in the user brief is correct in spirit but fuzzy at the seams
 | React dashboard UI | Base shell; we add motion/approval/experiment/review views | Forked, not rebased weekly — we track upstream (§3.5) |
 | Budget tracking (`budgetMonthlyCents`) | Used for LLM + third-party cost envelopes per agent | Extended with cost_events table for granular attribution |
 
-### 2.2 From SmarterMCP (free, deployed)
+### 2.2 From n8n connector fabric (active, deployed)
 
-| SmarterMCP capability | GrowthOS reuse |
+| n8n connector fabric capability | GrowthOS reuse |
 |---|---|
-| Multi-tenant gateway | Each GrowthOS `company` = SmarterMCP `tenant` (1:1) |
-| Tool entitlements | Motion stack → allowed tool set (inbound motion enables CMS tools, disables cold email tools) |
-| `proxy_search`, `proxy_filter`, `proxy_explore` | All large-response tools (search, CRM list queries, analytics exports) go through proxies to save tokens |
-| DLP / content filtering | Outbound content scanned for unverified claims, PII leakage, brand violations before dispatch |
-| Response cache | Cached enrichment, search, competitor scrapes — reduces duplicate spend across agents |
-| Audit trail | Immutable log of every tool call, joined against Paperclip `heartbeat_runs` by `X-Paperclip-Run-Id` |
-| Rate limits & quotas | Per-tenant ceilings prevent a runaway agent from exhausting upstream credits |
+| Downstream SaaS workflows | HubSpot/Salesforce/Mixmax/Nooks/LinkedIn/Reddit/etc. are configured in n8n, not as GrowthOS connectors |
+| Signed inbound webhooks | n8n sends normalized GTM events to `POST /v1/n8n/signals` |
+| Approved dispatch webhook | GrowthOS enqueues approved `n8n.dispatch.requested.v1` actions for n8n execution |
+| Vendor credentials | Stored and managed in n8n; GrowthOS stores only n8n endpoint/API/secret configuration |
+| Workflow retries | n8n handles vendor-specific retry behavior; GrowthOS handles domain idempotency and outbox replay |
+| Execution metadata | n8n workflow/execution IDs are stored in GrowthOS signal/dispatch payloads for audit and replay |
+| Rate limits & quotas | GrowthOS enforces tenant/action policy before dispatch; n8n enforces vendor/workflow-specific limits |
 
 ### 2.3 What we build (new, v4)
 
@@ -322,7 +322,7 @@ Paperclip moves fast (the brief mentions 2+ releases/week). Divergence strategy:
                              │ NOTIFY 'outbox.ready'
                              │
    ┌─────────────────────────┴─────────────────────────┐
-   │ Producers (workers, api mutations, SmarterMCP hooks)│
+   │ Producers (workers, api mutations, n8n connector fabric hooks)│
    │  → every domain write also inserts event_outbox row │
    │    in the SAME transaction                          │
    └────────────────────────────────────────────────────┘
@@ -365,79 +365,67 @@ This is the 8th hardening delta in the fork-track, peer with RLS and BullMQ. Mus
 
 ---
 
-## 4. SmarterMCP integration architecture
+## 4. n8n connector fabric integration architecture
 
-SmarterMCP is not "just a proxy." We treat it as the **tool execution kernel** and build our agent contract around it.
+n8n is not a model-visible tool gateway in the active architecture. It is the single external connector fabric. GrowthOS owns domain decisions, approvals, policy, idempotency, and audit; n8n owns downstream SaaS credentials, vendor-specific workflows, and vendor retries.
 
 ### 4.1 Adapter: `growthos_native` on Paperclip
 
 Paperclip's adapter model lets us plug in any runtime. We ship one adapter. Responsibilities:
 
 ```text
-On heartbeat tick:
-  1. Read run context from Paperclip (agent, issue, comments, documents, chain of command)
-  2. Resolve skills (see §7.2) from our skills library + active experiments
-  3. Resolve memory (see §7.3) from structured memory store
-  4. Compose structured system + user prompt (never free-text pasted)
-  5. Call LLM with a scoped SmarterMCP session:
-       - session.tenant_id = company.id
-       - session.entitlements = motion_stack → tool_allowlist
-       - session.run_id = paperclip_run_id
-       - session.budget_cap = min(agent.remaining_budget, run.cap)
-  6. Model emits either:
-       a. structured output (JSON schema enforced)
-       b. tool call (routed via SmarterMCP)
-  7. On structured output:
-       - write to issue document (key = output_type)
-       - enqueue self-critique
-       - enqueue confidence scoring
-  8. On tool call:
-       - SmarterMCP validates entitlement + DLP
-       - response returns (possibly truncated with proxy handle)
-       - loop to step 5 until model emits final output
-  9. Write run summary, cost_events, activity_log entries
+Inbound:
+  External SaaS → n8n workflow → signed POST /v1/n8n/signals
+    → SignalEventsRepository.ingest()
+    → signal_events
+    → Signal Router / Intel / Warmth / Lifecycle workers
+
+Outbound:
+  GrowthOS draft/action → critique/policy/approval
+    → POST /v1/n8n/dispatch
+    → event_outbox: n8n.dispatch.requested.v1
+    → async dispatcher → n8n production webhook
+    → downstream SaaS workflow
 ```
 
-**One agent = one LLM session = one Paperclip run = one SmarterMCP session**. This 1:1:1:1 mapping is how we join traces across systems.
+### 4.2 n8n inbound contract
 
-### 4.2 Tool catalog and entitlement matrix
+n8n must normalize vendor payloads before calling GrowthOS:
 
-Tools are grouped into *tool packs*. Motion activation enables tool packs, not individual tools. This matches the mental model operators have.
+- `eventId`: stable vendor/workflow event ID for idempotency.
+- `source`: vendor/source label such as `hubspot`, `mixmax`, `nooks`, `linkedin`, `reddit`, or `posthog`.
+- `signalType`: one of GrowthOS' known signal types.
+- `occurredAt`: source event timestamp.
+- `workflowId` / `executionId`: optional n8n metadata for audit/replay.
+- `payload`: compact normalized data. Large artifacts are URLs/object references, not pasted blobs.
 
-| Tool pack | Tools | Enabled by motion |
-|---|---|---|
-| `research.web` | search, url-fetch, exa, perplexity | all motions |
-| `research.social` | linkedin-view, x-view, reddit-view | inbound, community, outbound |
-| `research.enrichment` | apollo, clearbit, crunchbase | outbound, abm, partners |
-| `crm.read` | hubspot-read, salesforce-read | all |
-| `crm.write` | hubspot-write, salesforce-write | outbound, lifecycle, abm |
-| `content.cms` | webflow, sanity, ghost | inbound |
-| `content.publish.social` | linkedin-post, x-post | community, inbound |
-| `messaging.email` | customer-io, loops, resend | lifecycle, outbound |
-| `messaging.in_app` | pendo, appcues | lifecycle, plg |
-| `analytics.read` | ga4, mixpanel, segment | all |
-| `geo.probe` | chatgpt-search, perplexity-answer, google-sge | inbound (with GEO sub-skill) |
+GrowthOS authenticates inbound events with `X-GrowthOS-Signature` HMAC when `N8N_SHARED_SECRET` is configured and deduplicates via `(tenant, source, eventId)`.
 
-**Enforcement:** SmarterMCP is told the tool allowlist at session start. An agent cannot call a tool outside its motion's allowlist even if the LLM hallucinates a tool name — SmarterMCP refuses, logs, and returns a structured error the model can reason about.
+### 4.3 n8n outbound contract
 
-### 4.3 DLP policies per action tier
+GrowthOS never calls downstream SaaS directly. Approved actions are enqueued as `n8n.dispatch.requested.v1` with:
 
-SmarterMCP DLP runs on both request and response payloads. We configure policies per tier:
+- `tenantId`
+- `actionId`
+- `actionType`
+- `approvedBy`
+- `idempotencyKey`
+- `payload`
 
-| Tier | Request-side rules | Response-side rules |
-|---|---|---|
-| P0/P1 | block obvious PII leakage in prompts | redact customer PII from scraped content |
-| P2 (public) | block if contains `unverified_claim` token injected by claims-library checker | block if contains competitor names on do-not-mention list |
-| P3 (commercial/outbound) | require presence of `warmth_score_token` or `cold_override=true` | strip tracking pixels if tenant policy disallows |
-| P4 (sensitive) | no LLM dispatch allowed — human drafts | n/a |
+The request handler only validates and enqueues. The async dispatch path posts to `N8N_DISPATCH_WEBHOOK_URL` with bounded timeouts and preserves the idempotency key.
 
-DLP blocks are not silent; they create an `activity_log` entry with `event_type = 'risk.blocked'` and surface in the founder's approval queue as "blocked — reason."
+### 4.4 Policy and risk boundary
 
-### 4.4 Response caching and proxy exploration
+GrowthOS policy is authoritative before dispatch:
 
-Every SmarterMCP response > 4KB is cached with a content hash. The agent receives a *handle* + preview summary + token estimate. When the agent wants to drill down, it calls `proxy_search` or `proxy_filter` — a second round-trip that is ~10–100× cheaper than re-fetching the full response.
+| Tier | GrowthOS rule |
+|---|---|
+| P0/P1 | Internal/routing events only; safe to ingest automatically |
+| P2 public | Must pass claim and brand policy before publish dispatch |
+| P3 commercial/outbound | Must pass warmth/cold-override policy and human approval |
+| P4 sensitive | No automated dispatch; human drafts/executes |
 
-This is how we keep an "Intel Director" that reads 50 competitor pages/day inside a $200/month LLM budget.
+Policy blocks create an audit event and surface in the founder approval queue. n8n may add vendor-specific checks, but it does not override GrowthOS approval policy.
 
 ---
 
@@ -749,7 +737,7 @@ Each service in this section is a **module**, not necessarily a process. Some ru
 - Product telemetry availability flags
 - Founder content capacity (LinkedIn cadence, newsletter history)
 - Budget ceiling
-- Category search demand (pulled via SmarterMCP search tool)
+- Category search demand (pulled via n8n connector fabric search tool)
 - Community density signals (Reddit/Slack activity in ICP subreddits)
 
 **Scoring function:** deterministic multi-factor with published weights. Not LLM-generated. Version-stamped (`scorer_version`) so we can re-score historical inputs against new weights.
@@ -959,7 +947,7 @@ Decay: exp(-Δt / half_life); half_life varies by touch type (30-90 days).
 
 **Builder actions (scheduled per prospect):** auto-engage (like, comment thoughtfully) with the prospect's own content, ensure the founder's content reaches their feed via targeted distribution, schedule content-engagement reciprocation. All touches are themselves P2 actions requiring approval the first N times per founder until trust is established.
 
-**Gate into outbound:** a prospect must have `warmth_score ≥ 0.3` OR the founder has explicitly set `cold_override=true` for that campaign. Attempting to dispatch a P3 outbound touch below threshold fails at the SmarterMCP DLP layer, not silently.
+**Gate into outbound:** a prospect must have `warmth_score ≥ 0.3` OR the founder has explicitly set `cold_override=true` for that campaign. Attempting to dispatch a P3 outbound touch below threshold fails in GrowthOS policy before any n8n dispatch is enqueued.
 
 ### 6.7 GEO Monitor
 
@@ -967,7 +955,7 @@ Inbound is no longer just SEO. 40% of B2B discovery starts in AI search. We prob
 
 **Prompt library:** per tenant, we generate 20–50 prompts on onboarding based on their positioning (comparison, how-to, recommendation, definition intents). Stored in `geo_prompts`.
 
-**Probe cadence:** daily for high-priority prompts, weekly for long-tail. Each probe hits ChatGPT-search, Perplexity, Google SGE, and Claude search (as available via SmarterMCP tool pack).
+**Probe cadence:** daily for high-priority prompts, weekly for long-tail. Each probe hits ChatGPT-search, Perplexity, Google SGE, and Claude search (as available via n8n connector fabric tool pack).
 
 **Tracking:**
 - Am I cited? At what rank?
@@ -1209,7 +1197,7 @@ Every external action is expressed as a three-step durable unit:
 
 ```text
 1. intent.recorded     → writes to activity_log + generates idempotency_key
-2. dispatched          → SmarterMCP call with idempotency_key
+2. dispatched          → n8n connector fabric call with idempotency_key
 3. confirmed | failed  → records provider's ack or DLQ on retry exhaustion
 ```
 
@@ -1335,7 +1323,7 @@ Four cost axes per tenant per month:
 **Budget enforcement:**
 - Paperclip's `agent.budgetMonthlyCents` is the per-agent soft ceiling.
 - `cost_events` aggregates actuals. Worker checks remaining budget before expensive actions; at 90% a warning issues to founder; at 100% non-P0 work is paused for that agent.
-- SmarterMCP per-tenant quota enforces a hard ceiling even if workers fail to check.
+- n8n connector fabric per-tenant quota enforces a hard ceiling even if workers fail to check.
 
 **Expected v1 tenant unit economics (rough):**
 
@@ -1351,7 +1339,7 @@ This is the unit cost that determines the floor on pricing. §12 of the strategi
 
 ### 10.3 External send rate limits
 
-Hard-coded per channel, enforceable at SmarterMCP and reinforced in our dispatch queue:
+Hard-coded per channel, enforceable at n8n connector fabric and reinforced in our dispatch queue:
 
 | Channel | Per tenant per day | Per subject per week |
 |---|---|---|
@@ -1454,7 +1442,7 @@ Short. Linkable. Mobile-readable. No digest if no substantive items.
 
 ### 12.1 Three planes
 
-**Traces:** OpenTelemetry, propagated through api → worker → SmarterMCP → upstream. Trace IDs carried in Paperclip `X-Paperclip-Run-Id` header; SmarterMCP includes them in its audit events. One click in the founder-facing run detail shows the full trace: LLM calls, tool calls, DLP decisions, DB mutations, cost events.
+**Traces:** OpenTelemetry, propagated through api → worker → n8n connector fabric → upstream. Trace IDs carried in Paperclip `X-Paperclip-Run-Id` header; n8n connector fabric includes them in its audit events. One click in the founder-facing run detail shows the full trace: LLM calls, tool calls, DLP decisions, DB mutations, cost events.
 
 **Metrics (Prometheus):**
 - per-queue: depth, consume rate, failure rate, p50/p95/p99 processing latency
@@ -1468,7 +1456,7 @@ Short. Linkable. Mobile-readable. No digest if no substantive items.
 
 The canonical audit view is a union over:
 - `paperclip.heartbeat_runs` + events
-- SmarterMCP audit trail (joined by run_id)
+- n8n connector fabric audit trail (joined by run_id)
 - `growthos.activity_log` (partitioned)
 - `growthos.approval_feedback`
 
@@ -1499,7 +1487,7 @@ Exposed via a single `/api/audit` endpoint, tenant-scoped, cursor-paginated, and
 1. **Clerk** authenticates users; organization membership = tenant membership.
 2. **API gateway** resolves tenant from Clerk session, sets `app.tenant_id` and `app.actor_*` on the DB connection.
 3. **Postgres RLS** enforces at query time. `FORCE ROW LEVEL SECURITY` on every tenant-scoped table.
-4. **SmarterMCP** maintains its own tenant scoping at the tool layer.
+4. **n8n connector fabric** maintains its own tenant scoping at the tool layer.
 5. **Redis keys** are all `t:{tenant}:...` prefixed; a separate key-prefix linter runs in CI.
 6. **Object store** uses per-tenant prefixes + signed URL scoping.
 
@@ -1507,11 +1495,11 @@ A breach in any one layer does not yield cross-tenant data. We test this with a 
 
 ### 13.2 Secrets
 
-Per-tenant API keys (HubSpot, analytics, LinkedIn session tokens) live encrypted at rest with per-tenant KMS keys. Plain text never enters logs. Workers load secrets via SmarterMCP's tenant credential service, not direct env vars.
+Per-tenant API keys (HubSpot, analytics, LinkedIn session tokens) live encrypted at rest with per-tenant KMS keys. Plain text never enters logs. Workers load secrets via n8n connector fabric's tenant credential service, not direct env vars.
 
 ### 13.3 PII handling
 
-The DLP layer in SmarterMCP redacts PII from scraped responses before they reach the model prompt. Stored long-term only in CRM-mirror indices with per-field classification. Right-to-erasure (GDPR): a tenant-scoped erasure job scrubs `memory_items`, `activity_log`, and archived `cost_events` where applicable.
+The DLP layer in n8n connector fabric redacts PII from scraped responses before they reach the model prompt. Stored long-term only in CRM-mirror indices with per-field classification. Right-to-erasure (GDPR): a tenant-scoped erasure job scrubs `memory_items`, `activity_log`, and archived `cost_events` where applicable.
 
 ---
 
@@ -1531,16 +1519,16 @@ The DLP layer in SmarterMCP redacts PII from scraped responses before they reach
 
 ### 14.2 Environments
 
-- `dev` — single developer, embedded Postgres, local Redis, mock SmarterMCP.
-- `staging` — shared, real SmarterMCP against sandboxed upstreams, synthetic tenants.
-- `prod` — multi-tenant, real SmarterMCP, real upstreams.
+- `dev` — single developer, embedded Postgres, local Redis, mock n8n connector fabric.
+- `staging` — shared, real n8n connector fabric against sandboxed upstreams, synthetic tenants.
+- `prod` — multi-tenant, real n8n connector fabric, real upstreams.
 
 Migrations run via `paperclip` schema and `growthos` schema separately; Paperclip schema migrations are vendored with our hardening deltas applied on top.
 
 ### 14.3 Blast radius discipline
 
 - One runaway tenant cannot exhaust shared queues: BullMQ per-tenant rate limits.
-- One bad LLM prompt cannot exhaust LLM budget: per-agent cost cap + SmarterMCP session budget.
+- One bad LLM prompt cannot exhaust LLM budget: per-agent cost cap + dispatch rate limits before n8n execution.
 - One bad migration cannot nuke multi-tenant data: migrations that touch tenant data require a dry-run on a cloned shadow DB first.
 - One hot tenant cannot saturate the Pub/Sub bus: tenant-prefixed channels mean subscribers only pay for channels they care about, and per-channel publish rate is capped at the relay (deduping bursts within 50ms windows).
 - Pub/Sub outage cannot stop the product: the outbox is the contract; workers keep consuming the table directly, and the UI degrades to polling within 10s.
@@ -1554,7 +1542,7 @@ Migrations run via `paperclip` schema and `growthos` schema separately; Papercli
 Engineering priorities, in order:
 
 1. Fork Paperclip, ship RLS migration, ship BullMQ scheduler replacement, enable Redis cache, partition `activity_log` and `cost_events`, replace `LiveEventsServer` with Redis Pub/Sub fan-out via `outbox-relay` (§3.1–§3.6). (hardening first — nothing else works without it)
-2. SmarterMCP tenant provisioning + tool packs + custom adapter.
+2. n8n connector fabric tenant provisioning + tool packs + custom adapter.
 3. Motion Engine (scorer, stack selector, agent resolver, skills resolver) + skills library v0.
 4. Agents: Intel Director, Inbound Content Strategist, Reporting Director.
 5. Confidence Scorer (fast-path only, critique async).
@@ -1595,8 +1583,8 @@ Engineering priorities, in order:
 | Paperclip upstream diverges hard, RLS patch won't rebase cleanly | High | High | Weekly merge cadence; RLS implemented as orthogonal layer (new column + policies) that rarely conflicts with logic changes |
 | Learning Director proposes bad playbook changes that compound | Medium | Critical | Approval gate on every skill update; ttl_days + revalidation; ability to roll back any playbook version |
 | Signal Router floods on a bad webhook source | Medium | Medium | Per-tenant rate limit, dedupe, backpressure demotion |
-| LLM costs blow past budget | Medium | Medium | SmarterMCP session cap + agent budget + cost_events monitoring + auto-pause at 100% |
-| SmarterMCP becomes single point of failure for all external I/O | Medium | High | SmarterMCP deployed HA; fallback "direct mode" for read-only tools under break-glass; circuit breakers in our adapter |
+| LLM costs blow past budget | Medium | Medium | Agent budget + dispatch limits + cost_events monitoring + auto-pause at 100% |
+| n8n connector fabric becomes single point of failure for all external I/O | Medium | High | n8n connector fabric deployed HA; fallback "direct mode" for read-only tools under break-glass; circuit breakers in our adapter |
 | Confidence scores become uncalibrated, founders lose trust | Medium | Critical | Monthly calibration report comparing predicted confidence vs observed outcome; recalibration of weights; conservative auto-approve unlock |
 | Warmth gate becomes a bottleneck, founder goes to cold by default | Medium | Medium | Fast path: founder content distribution + auto-reciprocation seeds warmth without per-prospect approvals; P2 auto-approve for warming touches after trust built |
 | Global cross-founder learning leaks tenant data | Low | Critical | Minimum aggregation size; structural enforcement in pipeline; no free-text fields in global learnings |
@@ -1632,7 +1620,7 @@ Testing is not an afterthought here — several product invariants (tenant isola
 3. **LLMs are clamped in tests.** Producer LLMs are replaced with deterministic stubs that return fixtures. We test *prompt composition and output handling*, not the model itself. A separate offline eval suite (§18.11) tracks model quality.
 4. **Time is injectable.** No test calls `Date.now()` directly. All services take a `Clock` dependency so time-based behavior (TTL, decay, experiment windows) is testable in milliseconds.
 5. **Flaky tests are bugs.** A test that passes on retry is broken and gets a P1 issue. We do not retry-until-green in CI.
-6. **Production parity in staging.** Staging runs the full stack including SmarterMCP (sandboxed upstreams) and real Postgres/Redis. No "mocked SmarterMCP in staging."
+6. **Production parity in staging.** Staging runs the full stack including n8n connector fabric (sandboxed upstreams) and real Postgres/Redis. No "mocked n8n connector fabric in staging."
 
 ### 18.2 Test pyramid and coverage targets
 
@@ -1839,7 +1827,7 @@ schemas/outputs/blog_draft.v1.spec.ts
 
 ### 18.5 Integration tests (cross-service seams)
 
-Tools: Testcontainers (Postgres 16 + pgvector, Redis 7), real BullMQ, a fake SmarterMCP gateway (contract-tested against the real one nightly), Playwright for UI, `msw` for upstream HTTP.
+Tools: Testcontainers (Postgres 16 + pgvector, Redis 7), real BullMQ, a fake n8n connector fabric gateway (contract-tested against the real one nightly), Playwright for UI, `msw` for upstream HTTP.
 
 **Seam: Heartbeat lifecycle**
 
@@ -1879,7 +1867,7 @@ integration/confidence-approval/
 
 ```text
 integration/dispatch/
-  · approved_content_cms_publish_call_goes_through_smartermcp
+  · approved_content_cms_publish_call_goes_through_n8n
   · dlp_block_prevents_dispatch_and_surfaces_in_approval_queue
   · dispatch_failure_retries_with_exponential_backoff_read_only_tools
   · external_send_failure_never_retries_and_lands_in_dlq
@@ -1956,7 +1944,7 @@ cross-tenant-probes/
   · tenant_a_cannot_read_tenant_b_memory_items_via_direct_sql
   · tenant_a_cannot_read_tenant_b_confidence_scores
   · tenant_a_cannot_subscribe_to_tenant_b_pubsub_channel
-  · tenant_a_cannot_invoke_tenant_b_smartermcp_session
+  · tenant_a_cannot_invoke_tenant_b_n8n_session
   · tenant_a_cannot_retrieve_tenant_b_cached_response_via_content_hash_guess
 ```
 
@@ -1995,7 +1983,7 @@ security/auth/
   · stripe_webhook_hmac_signature_mismatch_rejected
 
 security/dlp/
-  · p3_send_containing_unverified_claim_is_blocked_by_smartermcp
+  · p3_send_containing_unverified_claim_is_blocked_by_n8n
   · p2_post_containing_banned_competitor_name_is_blocked
   · pii_in_scraped_response_is_redacted_before_model_sees_it
   · prompt_injection_in_scraped_page_does_not_escalate_privileges
@@ -2049,8 +2037,8 @@ chaos/
   · postgres-failover.spec
       inject: promote read replica to primary
       assert: api + workers reconnect within 30s; no RLS bypass during reconnect
-  · smartermcp-timeout-spike.spec
-      inject: 50% of SmarterMCP calls timeout
+  · n8n-timeout-spike.spec
+      inject: 50% of n8n connector fabric calls timeout
       assert: agent runs retry read-only tools, fail fast on writes; no duplicate external sends; circuit breaker opens
   · outbox-relay-leader-kill.spec
       inject: kill relay leader
@@ -2128,7 +2116,7 @@ pre-merge-to-main (blocking, < 25 min):
 
 nightly (non-blocking but tracked, pages on repeated failure):
   · load suite
-  · SmarterMCP contract test against real staging gateway
+  · n8n connector fabric contract test against real staging gateway
   · offline eval suite
 
 weekly (blocking weekly release):
@@ -2145,7 +2133,7 @@ weekly (blocking weekly release):
 
 **LLM stubs.** Producer LLMs are replaced in tests with `RecordingLLM` — on first run against staging, it records real model outputs to a JSON fixture; subsequent runs replay. Refreshing a fixture requires a PR so drift is visible.
 
-**SmarterMCP fake.** An in-process fake that implements the real gateway's contract plus hooks to simulate timeouts, rate limits, DLP blocks, and partial failures. Nightly contract test compares fake behavior against real staging gateway.
+**n8n connector fabric fake.** An in-process fake that implements the real gateway's contract plus hooks to simulate timeouts, rate limits, DLP blocks, and partial failures. Nightly contract test compares fake behavior against real staging gateway.
 
 **Time control.** A shared `TestClock` singleton is injected in all tests. `clock.advance('7 days')` works across workers. Real `Date.now()` use is forbidden by a lint rule.
 
@@ -2172,7 +2160,7 @@ Every one of these has a corresponding monitor or manual process. They are not t
 | BullMQ scheduler | platform | `scheduler` |
 | Outbox relay (Pub/Sub fan-out) | platform | `outbox-relay` |
 | WebSocket / SSE gateway | platform | `ws-gateway` (co-located with `api` in v1) |
-| SmarterMCP | vendored, configured | separate service |
+| n8n connector fabric | vendored, configured | separate service |
 | Motion Engine | domain | library in `api` + `worker-heartbeat` |
 | Signal Router | domain | `worker-signal-router` |
 | Confidence Scorer | domain | library + `worker-critique` |
@@ -2202,7 +2190,7 @@ t+0.5s  signals row created. paperclip.wakeup(intel_director) queued.
 t+0.8s  Heartbeat worker consumes; Paperclip run created.
 t+1.0s  growthos_native adapter: skills resolved (intel_director@active),
         memory resolved (icp_snapshot, messaging_matrix, recent_signals),
-        SmarterMCP session opened (tools: research.web, analytics.read).
+        n8n connector path active (signed signals + approved dispatch only).
 t+1-12s LLM synthesis: competitor delta + content opportunity hypothesis.
 t+12s   Fast confidence scoring: 0.78. Risk tier: P0 (internal brief).
 t+12s   Intel brief written as issue document. Handoff emitted:
@@ -2216,7 +2204,7 @@ t+28s   executionPolicy advances to approval stage.
         Founder gets digest notification + approval queue entry.
 t+?     Founder reviews, edits 12% of the draft, approves.
 t+0     approval_feedback row: action=edited_then_approved, edit_distance=0.12.
-t+0.5s  dispatch queued: content.cms.publish (CMS tool via SmarterMCP).
+t+0.5s  dispatch queued: content.cms.publish (CMS tool via n8n connector fabric).
 t+2s    Published. confirmed event. attribution touchpoint created.
 t+1d    Analytics: 180 sessions, 4 signups from this piece.
         performance.observed event → Learning Director ingests.

@@ -19,10 +19,15 @@ const isValidWebsiteUrl = (value: string): boolean => {
   }
 };
 
-export function CompanyStepForm({ defaults, submitAction }: CompanyStepFormProps) {
+export function CompanyStepForm({
+  defaults,
+  submitAction,
+}: CompanyStepFormProps) {
   const [companyName, setCompanyName] = useState(defaults.companyName ?? "");
   const [website, setWebsite] = useState(defaults.website ?? "");
-  const [icpDescription, setIcpDescription] = useState(defaults.icpDescription ?? "");
+  const [icpDescription, setIcpDescription] = useState(
+    defaults.icpDescription ?? "",
+  );
 
   const companyNameError =
     companyName.trim().length === 0 ? "Company name is required" : null;
@@ -62,7 +67,6 @@ export function CompanyStepForm({ defaults, submitAction }: CompanyStepFormProps
         <p
           id="company-name-error"
           className="mt-1 text-xs text-red-600"
-          role="status"
           aria-live="polite"
         >
           {companyNameError ?? ""}
@@ -89,7 +93,6 @@ export function CompanyStepForm({ defaults, submitAction }: CompanyStepFormProps
         <p
           id="website-error"
           className="mt-1 text-xs text-red-600"
-          role="status"
           aria-live="polite"
         >
           {websiteError ?? ""}
@@ -121,7 +124,6 @@ export function CompanyStepForm({ defaults, submitAction }: CompanyStepFormProps
         <p
           id="icp-error"
           className="mt-1 text-xs text-red-600"
-          role="status"
           aria-live="polite"
         >
           {icpError ?? ""}

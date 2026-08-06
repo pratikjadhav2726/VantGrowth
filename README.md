@@ -1,37 +1,85 @@
 # GrowthOS
 
-GrowthOS is a self-hostable GTM operating system that combines:
+[![CI](https://github.com/pratikjadhav2726/VantGrowth/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/pratikjadhav2726/VantGrowth/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-- a Next.js founder console (`apps/web`)
-- a Hono API (`apps/api`)
-- background workers for scoring, routing, critique, learning, and workflow callbacks
-- tenant-scoped data/event infrastructure (Postgres + NATS + object storage + analytics)
+GrowthOS is a self-hostable, multi-tenant GTM operating system for teams that
+want to turn customer, market, and product signals into governed marketing and
+revenue work.
 
-It is designed for multi-tenant, asynchronous GTM operations where ingestion, scoring, approvals, and learning are all auditable and replayable.
+> **Project status: beta.** The core event-driven GTM loop is implemented and
+> suitable for local development and supervised deployments. Review the
+> [known limitations](#known-limitations) before using it for production or
+> unattended external actions.
 
-## What this repo does
+## Vision
 
-At a high level, this monorepo provides:
+GrowthOS is built around a simple idea: a small team should be able to operate
+like a much larger GTM organization without giving software unchecked authority
+over its brand, customer data, money, or reputation.
 
-- **Founder UX** for onboarding, motion stack scoring, approval queue, weekly review, and settings
-- **API contracts** for motions, approvals, signals, workflows, digest delivery, and tenant settings
-- **Worker pipelines** for signal routing, critique, learning, outbox publishing, and provisioning callbacks
-- **Data layer** with Drizzle + RLS patterns, migration workflows, and repository boundaries
-- **Observability** via OpenTelemetry + structured logs
+The long-term vision is an autonomous, evidence-governed GTM system that can:
+
+- observe product, market, and customer signals;
+- turn those signals into research, content, experiments, and recommended
+  actions;
+- apply tenant-specific policies, budgets, and approval gates before action;
+- measure outcomes and learn from durable evidence; and
+- retain a complete audit trail with safe rollback paths.
+
+Autonomy is deliberately **governed**, not unconditional. External,
+commercial, sensitive, or spend-increasing actions should remain behind the
+tenant's explicit policy and approval rules until evidence and operational
+controls justify greater automation.
+
+## What works today
+
+- A Next.js founder console for onboarding, motion scoring, approvals, weekly
+  review, and settings.
+- A Hono API for signals, motions, approvals, experiments, learning proposals,
+  workflow callbacks, and tenant settings.
+- Durable worker pipelines for signal routing, intelligence, content briefs,
+  drafts, critique, learning, attribution, warmth, and outbox publishing.
+- Multi-tenant data and event boundaries using Postgres, Row-Level Security,
+  transactional outbox delivery, and NATS JetStream.
+- An adaptive learning loop with evidence-gated promotion, human approval, and
+  rollback references.
+- n8n contracts for signed inbound signals and approved outbound SaaS actions.
+
+## Architecture
+
+```text
+Signals from product, market, and SaaS tools
+                 |
+                 v
+        GrowthOS API + tenant inbox
+                 |
+                 v
+    leased routing -> transactional outbox
+                 |
+                 v
+             NATS JetStream
+                 |
+                 v
+ intel -> content -> draft -> critique -> learning
+                 |
+                 v
+ policy + approval + n8n dispatch -> external outcome
+                 |
+                 v
+      evidence, experiments, and rollback-aware learning
+```
+
+GrowthOS owns reasoning, policy, audit, and lifecycle state. n8n is the
+connector fabric for downstream SaaS credentials, vendor-specific workflows,
+and execution retries. See the [n8n end-to-end guide](docs/n8n/END_TO_END.md)
+for the integration contract.
 
 ## Quick start
 
-### Option A: local dev (pnpm)
+### Recommended: Docker development stack
 
-```bash
-pnpm install
-pnpm dev
-```
-
-- Web: `http://localhost:3088`
-- API: `http://localhost:3001`
-
-### Option B: Docker dev stack (recommended for demos)
+Prerequisites: Docker Desktop and Docker Compose.
 
 ```bash
 cp .env.example .env
@@ -39,60 +87,79 @@ docker compose -f compose.dev.yaml up --build -d
 docker compose -f compose.dev.yaml ps
 ```
 
-- Web: `http://localhost:3000`
-- API: `http://localhost:3001`
+Open:
 
-Default login for local demo:
+- Web: `http://localhost:3080`
+- API health: `http://localhost:3091/health`
 
-- Email: any valid email
-- Password: `growthos-dev-admin` (or `GROWTHOS_WEB_ADMIN_PASSWORD` if set)
+For a disposable local n8n instance, start the optional profile:
 
-## Core endpoints
+```bash
+docker compose -f compose.dev.yaml --profile local-n8n up --build -d
+```
 
-- `GET /health`
-- `GET /v1/motion`
-- `POST /v1/motions/score`
-- `GET /v1/approvals`
-- `POST /v1/approvals/decide`
-- `POST /v1/signals`
-- `POST /v1/signals/grade`
-- `GET /v1/digest/weekly`
-- `POST /v1/digest/send`
-- `GET /v1/settings`
-- `PATCH /v1/settings`
+The local demo accepts any valid email. Its default password is
+`growthos-dev-admin`; override it with `GROWTHOS_WEB_ADMIN_PASSWORD`.
 
-## Paperclip fork integration status
+### Run from source
 
-You are right to call this out: Paperclip is integrated, but currently optional and env-gated.
+Prerequisites: Node.js 22+, pnpm 10+, and the local dependencies required by
+the services you run.
 
-### Where it is used today
+```bash
+pnpm install
+pnpm dev
+```
 
-- API route `POST /v1/paperclip/bootstrap-tenant` creates:
-  - Paperclip company
-  - initial `growthos_native` agent
-  - seed issue
-- `TenantProvisioningOrchestrator` includes a `paperclip_company` step in the provisioning sequence
-- `@growthos/adapter` contains typed Paperclip client contracts and `growthos_native` adapter schema
+For database migrations, seed data, and the full local infrastructure stack,
+follow [Local operations](#local-operations).
 
-### Why it may look unused
+## Core API surface
 
-- If `PAPERCLIP_BASE_URL` and `PAPERCLIP_SERVICE_TOKEN` are **not** set, the Paperclip client is disabled by design.
-- In that mode, most local flows still work via GTM-native services, so Paperclip is not in the critical path.
+| Area | Endpoints |
+| --- | --- |
+| Health and status | `GET /health`, `GET /v1/system/status` |
+| Motions | `GET /v1/motion`, `POST /v1/motions/score` |
+| Signals | `POST /v1/signals`, `POST /v1/signals/grade` |
+| Approvals | `GET /v1/approvals`, `POST /v1/approvals/decide` |
+| Learning | `GET /v1/learning-proposals`, experiment and outcome routes |
+| n8n | `POST /v1/n8n/signals`, `POST /v1/n8n/dispatch` |
+| Settings | `GET /v1/settings`, `PATCH /v1/settings` |
 
-### To enable your fork
+Protect mutation and control-plane routes in shared or production
+environments with `GROWTHOS_API_SERVICE_TOKEN`. See [the user guide](docs/USER_GUIDE.md)
+for the first-run flow and [the n8n guide](docs/n8n/END_TO_END.md) for signed
+integration payloads.
 
-Point GrowthOS at your Paperclip fork deployment by setting:
+## Integrations
 
-- `PAPERCLIP_BASE_URL`
-- `PAPERCLIP_SERVICE_TOKEN`
-- optional: `PAPERCLIP_TIMEOUT_MS`
-- optional strict mode: `GROWTHOS_REQUIRE_PAPERCLIP=true` (API health turns unhealthy and web shows warning banner when disconnected)
+### n8n
 
-See `.env.example` and `paperclip_guide.md`.
+n8n is the active external connector layer. It sends normalized, signed signals
+to GrowthOS and receives approved dispatch requests asynchronously. Configure
+at least:
 
-## Local infra and operations
+```bash
+N8N_SHARED_SECRET=<replace-in-production>
+N8N_DISPATCH_WEBHOOK_URL=<n8n-dispatch-webhook>
+OUTBOX_TENANT_IDS=<comma-separated-tenant-uuids>
+```
 
-For full infra stack (Postgres, NATS, Valkey, MinIO, ClickHouse, Qdrant, Gitea, Meilisearch, OpenBao), use:
+Use a different credential set for every tenant. Do not let a workflow bypass
+GrowthOS policy, approval, idempotency, or tenant scoping.
+
+### Paperclip
+
+Paperclip is an optional control-plane integration for agent registration,
+hiring governance, and issue tracking. It is not required for the native GTM
+pipeline and is not a turnkey unattended-agent feature. Enable it only when a
+Paperclip deployment, explicit tenant mapping, and the corresponding worker
+configuration are in place. See [the Paperclip guide](paperclip_guide.md).
+
+## Local operations
+
+Start the complete local infrastructure stack (Postgres, NATS, Valkey, MinIO,
+ClickHouse, Qdrant, Gitea, Meilisearch, and OpenBao):
 
 ```bash
 pnpm infra:up
@@ -100,7 +167,7 @@ pnpm infra:ps
 pnpm infra:down
 ```
 
-Migration and seed flow:
+Migration and development seed flow:
 
 ```bash
 pnpm migrate:dry-run
@@ -109,24 +176,65 @@ pnpm seed:dev
 pnpm smoke:infra
 ```
 
-## CI and quality gates
+Troubleshooting and operational runbooks live in the
+[user guide](docs/USER_GUIDE.md) and [`docs/runbooks`](docs/runbooks).
 
-CI runs on PR/push:
+## Development and quality
 
-- `pnpm check`
-- `pnpm typecheck`
-- `pnpm test`
-- migration dry-run + Atlas validate/lint
+Before opening a pull request, run:
 
-## Docs
+```bash
+pnpm check
+pnpm typecheck
+pnpm test
+```
 
-- Architecture: `Growthos_v4_Technical_Architecture.md`
-- Stack decisions: `Growthos_v4_Stack_Decisions.md`
-- Implementation status: `Growthos_v4_Implementation_Plan.md`
-- Paperclip integration notes: `paperclip_guide.md`
-- Container images: `docker/README.md`
-- User guide: `docs/USER_GUIDE.md`
-- Contributing: `CONTRIBUTING.md`
-- Security policy: `SECURITY.md`
-- Code of conduct: `CODE_OF_CONDUCT.md`
-- Open-source checklist: `docs/OPEN_SOURCE_CHECKLIST.md`
+For schema changes, also run:
+
+```bash
+pnpm migrate:dry-run
+pnpm atlas:validate
+pnpm atlas:lint
+```
+
+The CI workflow runs linting, type checks, unit tests, migration validation,
+and RLS invariants on pull requests to the active development branches.
+
+## Known limitations
+
+- GrowthOS is beta software. Run it in a controlled environment and validate
+  tenant policies, credentials, and operational monitoring before production.
+- The supplied Docker configuration is for local development and demos; it is
+  not a production deployment guide.
+- Paperclip integration is optional and requires separate deployment and
+  worker configuration. It should not be treated as a complete generic-agent
+  executor.
+- n8n workflows are intentionally tenant- and credential-specific. You must
+  configure, secure, and test the workflows for each connected SaaS system.
+- Do not enable unattended public, commercial, sensitive, or spend-increasing
+  actions without explicit policies, approval gates, auditability, and
+  incident response in place.
+
+## Documentation
+
+- [User guide](docs/USER_GUIDE.md)
+- [n8n end-to-end integration](docs/n8n/END_TO_END.md)
+- [Adaptive GTM harness](docs/ADAPTIVE_GTM_HARNESS.md)
+- [Harness card](docs/GROWTHOS_HARNESS_CARD.md)
+- [Technical architecture](Growthos_v4_Technical_Architecture.md)
+- [Stack decisions](Growthos_v4_Stack_Decisions.md)
+- [Implementation plan](Growthos_v4_Implementation_Plan.md)
+- [Container images](docker/README.md)
+
+## Contributing, security, and community
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the
+development and pull-request workflow and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+for community expectations.
+
+Please do **not** report vulnerabilities in public issues. Follow
+[SECURITY.md](SECURITY.md) for responsible disclosure guidance.
+
+## License
+
+GrowthOS is released under the [MIT License](LICENSE).

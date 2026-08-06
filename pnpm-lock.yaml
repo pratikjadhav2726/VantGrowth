@@ -38,6 +38,9 @@ importers:
       '@growthos/llm-harness':
         specifier: workspace:*
         version: link:../../packages/llm-harness
+      '@growthos/n8n':
+        specifier: workspace:*
+        version: link:../../packages/n8n
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -63,9 +66,27 @@ importers:
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@growthos/worker-blog-draft':
+        specifier: workspace:*
+        version: link:../worker-blog-draft
+      '@growthos/worker-content-strategist':
+        specifier: workspace:*
+        version: link:../worker-content-strategist
+      '@growthos/worker-critique':
+        specifier: workspace:*
+        version: link:../worker-critique
+      '@growthos/worker-intel-director':
+        specifier: workspace:*
+        version: link:../worker-intel-director
+      '@growthos/worker-learning':
+        specifier: workspace:*
+        version: link:../worker-learning
       '@growthos/worker-outbox-publisher':
         specifier: workspace:*
         version: link:../worker-outbox-publisher
+      '@growthos/worker-signal-router':
+        specifier: workspace:*
+        version: link:../worker-signal-router
       nats:
         specifier: ^2.29.3
         version: 2.29.3
@@ -119,15 +140,15 @@ importers:
 
   apps/worker-attribution:
     dependencies:
+      '@growthos/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability
-      nats:
-        specifier: ^2.29.3
-        version: 2.29.3
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -188,6 +209,9 @@ importers:
 
   apps/worker-critique:
     dependencies:
+      '@growthos/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -235,6 +259,9 @@ importers:
 
   apps/worker-learning:
     dependencies:
+      '@growthos/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -257,6 +284,9 @@ importers:
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@growthos/n8n':
+        specifier: workspace:*
+        version: link:../../packages/n8n
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -280,8 +310,30 @@ importers:
         specifier: ^4.19.4
         version: 4.21.0
 
+  apps/worker-paperclip-heartbeat:
+    dependencies:
+      '@growthos/adapter':
+        specifier: workspace:*
+        version: link:../../packages/adapter
+      '@growthos/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@growthos/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      tsx:
+        specifier: ^4.19.4
+        version: 4.21.0
+
   apps/worker-signal-router:
     dependencies:
+      '@growthos/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -304,15 +356,15 @@ importers:
 
   apps/worker-warmth:
     dependencies:
+      '@growthos/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@growthos/db':
         specifier: workspace:*
         version: link:../../packages/db
       '@growthos/observability':
         specifier: workspace:*
         version: link:../../packages/observability
-      nats:
-        specifier: ^2.29.3
-        version: 2.29.3
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -379,6 +431,9 @@ importers:
       '@growthos/identity':
         specifier: workspace:*
         version: link:../identity
+      nats:
+        specifier: ^2.29.3
+        version: 2.29.3
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -431,6 +486,16 @@ importers:
       zod:
         specifier: ^3.23.8
         version: 3.25.76
+
+  packages/n8n:
+    dependencies:
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.17)
 
   packages/observability:
     dependencies:
@@ -2043,6 +2108,7 @@ packages:
   '@smithy/util-retry@4.3.6':
     resolution: {integrity: sha512-p6/FO1n2KxMeQyna067i0uJ6TSbb165ZhnRtCpWh4Foxqbfc6oW+XITaL8QkFJj3KFnDe2URt4gOhgU06EP9ew==}
     engines: {node: '>=18.0.0'}
+    deprecated: '@smithy/util-retry v4.3.6 contains a bug in Adaptive Retry, see https://github.com/smithy-lang/smithy-typescript/issues/1993. Upgrade to 4.3.7+'
 
   '@smithy/util-stream@4.5.25':
     resolution: {integrity: sha512-/PFpG4k8Ze8Ei+mMKj3oiPICYekthuzePZMgZbCqMiXIHHf4n2aZ4Ps0aSRShycFTGuj/J6XldmC0x0DwednIA==}
@@ -2667,6 +2733,7 @@ packages:
   nats@2.29.3:
     resolution: {integrity: sha512-tOQCRCwC74DgBTk4pWZ9V45sk4d7peoE2njVprMRCBXrhJ5q5cYM7i6W+Uvw2qUrcfOSnuisrX7bEx3b3Wx4QA==}
     engines: {node: '>= 14.0.0'}
+    deprecated: Package moved. Use @nats-io/transport-node from https://github.com/nats-io/nats.js
 
   next@15.5.15:
     resolution: {integrity: sha512-VSqCrJwtLVGwAVE0Sb/yikrQfkwkZW9p+lL/J4+xe+G3ZA+QnWPqgcfH1tDUEuk9y+pthzzVFp4L/U8JerMfMQ==}

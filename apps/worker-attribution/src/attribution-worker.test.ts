@@ -1,10 +1,10 @@
 import { InMemoryOutboxRepository } from "@growthos/db";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   AttributionWorker,
-  type EventPublisher,
   synthesizeAttributionRollup,
 } from "./attribution-worker.js";
+import { parseAttributionSignalEvent } from "./contracts.js";
 
 const tenantId = "00000000-0000-4000-8000-000000000001";
 
@@ -44,13 +44,55 @@ describe("synthesizeAttributionRollup", () => {
   });
 });
 
+describe("parseAttributionSignalEvent", () => {
+  const eventPayload = {
+    tenant_id: tenantId,
+    attribution_id: "attr-wire-1",
+    dedupe_key: "attr-wire-1",
+    source: "nightly_rollup",
+    opportunity_id: "opp-wire-1",
+    account_id: "acct-wire-1",
+    window: "30d" as const,
+    touchpoints: [
+      {
+        channel: "email",
+        campaign_id: "campaign-1",
+        event_type: "email_opened",
+        occurred_at: "2026-04-02T00:00:00.000Z",
+      },
+    ],
+    conversion_value_micros: 5_000_000,
+  };
+
+  it("normalizes the durable snake_case event contract", () => {
+    const signal = parseAttributionSignalEvent(eventPayload, tenantId);
+
+    expect(signal).toMatchObject({
+      tenantId,
+      attributionId: "attr-wire-1",
+      dedupeKey: "attr-wire-1",
+      opportunityId: "opp-wire-1",
+      conversionValueMicros: 5_000_000,
+    });
+    expect(signal.touchpoints[0]?.occurredAt).toEqual(
+      new Date("2026-04-02T00:00:00.000Z"),
+    );
+  });
+
+  it("rejects a payload that claims a different tenant", () => {
+    expect(() =>
+      parseAttributionSignalEvent(
+        eventPayload,
+        "00000000-0000-4000-8000-000000000002",
+      ),
+    ).toThrow("does not match");
+  });
+});
+
 describe("AttributionWorker", () => {
-  it("emits attribution rollup event into outbox and tenant subject", async () => {
+  it("emits attribution rollup event into the durable outbox", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
-    const eventPublisher: EventPublisher = {
-      publish: vi.fn(async () => undefined),
-    };
-    const worker = new AttributionWorker({ outboxRepository, eventPublisher });
+    const worker = new AttributionWorker({ outboxRepository });
 
     const result = await worker.process({
       tenantId,
@@ -71,25 +113,19 @@ describe("AttributionWorker", () => {
     });
 
     expect(result.totalTouchpoints).toBe(1);
-    expect(eventPublisher.publish).toHaveBeenCalledWith(
-      `t.${tenantId}.attribution.rollup.computed.v1`,
-      expect.objectContaining({
-        attribution_id: "attr-1",
-        total_touchpoints: 1,
-      }),
-    );
-
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
     expect(events).toHaveLength(1);
     expect(events[0]?.eventType).toBe("attribution.rollup.computed.v1");
+    expect(events[0]?.payload).toMatchObject({
+      tenant_id: tenantId,
+      attribution_id: "attr-1",
+      total_touchpoints: 1,
+    });
   });
 
   it("keeps outbox idempotent for duplicate attribution signals", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
-    const worker = new AttributionWorker({
-      outboxRepository,
-      eventPublisher: { publish: vi.fn(async () => undefined) },
-    });
+    const worker = new AttributionWorker({ outboxRepository });
 
     const request = {
       tenantId,

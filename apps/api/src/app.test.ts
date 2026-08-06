@@ -3,6 +3,7 @@ import { PaperclipClient, type PaperclipClientPort } from "@growthos/adapter";
 import type { RestateWorkflowClientPort } from "@growthos/core";
 import {
   InMemoryApprovalFeedbackRepository,
+  InMemoryExternalActionsRepository,
   InMemoryMotionStackRepository,
   InMemoryOutboxRepository,
   InMemorySignalEventsRepository,
@@ -533,13 +534,24 @@ describe("API app", () => {
         identifier: "LAT-INB",
         name: "Inbound Strategist",
       })),
+      createAgentHire: vi.fn(async () => ({
+        agent: {
+          id: "agt_1",
+          identifier: "LAT-INB",
+          name: "Inbound Strategist",
+          status: "pending_approval",
+        },
+        approval: { id: "apr_1", status: "pending", type: "hire_agent" },
+      })),
       createIssue: vi.fn(async () => ({
         id: "iss_1",
         identifier: "LAT-1",
         title: "Seed issue",
         status: "todo",
       })),
+      listCompanyIssues: vi.fn(async () => []),
       checkoutIssue: vi.fn(),
+      requeueIssue: vi.fn(),
       releaseIssue: vi.fn(),
       wakeupAgent: vi.fn(),
     };
@@ -568,7 +580,16 @@ describe("API app", () => {
 
     expect(response.status).toBe(202);
     expect(mockClient.createCompany).toHaveBeenCalledTimes(1);
-    expect(mockClient.createAgent).toHaveBeenCalledTimes(1);
+    expect(mockClient.createAgentHire).toHaveBeenCalledTimes(1);
+    expect(mockClient.createAgentHire).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "cmo",
+        metadata: expect.objectContaining({
+          growthos_requested_role: "content_strategist",
+          growthos_role_normalized: true,
+        }),
+      }),
+    );
     expect(mockClient.createIssue).toHaveBeenCalledTimes(1);
     const responsePayload = (await response.json()) as {
       idempotencyKey: string;
@@ -584,13 +605,24 @@ describe("API app", () => {
         identifier: "LAT-INB",
         name: "Inbound Strategist",
       })),
+      createAgentHire: vi.fn(async () => ({
+        agent: {
+          id: "agt_1",
+          identifier: "LAT-INB",
+          name: "Inbound Strategist",
+          status: "pending_approval",
+        },
+        approval: { id: "apr_1", status: "pending", type: "hire_agent" },
+      })),
       createIssue: vi.fn(async () => ({
         id: "iss_1",
         identifier: "LAT-1",
         title: "Seed issue",
         status: "todo",
       })),
+      listCompanyIssues: vi.fn(async () => []),
       checkoutIssue: vi.fn(),
+      requeueIssue: vi.fn(),
       releaseIssue: vi.fn(),
       wakeupAgent: vi.fn(),
     };
@@ -682,9 +714,13 @@ describe("API app", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            id: "agt_1",
-            identifier: "LAT-INB",
-            name: "Inbound Strategist",
+            agent: {
+              id: "agt_1",
+              identifier: "LAT-INB",
+              name: "Inbound Strategist",
+              status: "pending_approval",
+            },
+            approval: { id: "apr_1", status: "pending", type: "hire_agent" },
           }),
           {
             status: 200,
@@ -966,7 +1002,10 @@ describe("GET /v1/approvals", () => {
       tenantId,
       eventType: "blog_draft.v1",
       idempotencyKey: "draft-1",
-      payload: { draft_id: "d-001", title: "PLG Explained" },
+      payload: {
+        draft_id: "00000000-0000-4000-8000-000000000201",
+        title: "PLG Explained",
+      },
     });
     await outboxRepository.enqueue({
       tenantId,
@@ -990,6 +1029,62 @@ describe("GET /v1/approvals", () => {
     expect(body.items[0]?.outputType).toBe("blog_draft.v1");
   });
 
+  it("keeps published approval artifacts pending until a founder decision exists", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const event = await outboxRepository.enqueue({
+      tenantId,
+      eventType: "blog_draft.v1",
+      idempotencyKey: "draft-published-1",
+      payload: {
+        draft_id: "00000000-0000-4000-8000-000000000202",
+        title: "Founder-led GTM teardown",
+      },
+    });
+    await outboxRepository.markConsumed(tenantId, event.id);
+
+    const app = createApp({ outboxRepository });
+    const res = await app.request(
+      "http://localhost/v1/approvals?outputType=blog_draft.v1",
+      { headers: { "X-Tenant-Id": tenantId } },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { total: number };
+    expect(body.total).toBe(1);
+  });
+
+  it("hides approval artifacts after the founder decides on them", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
+    const issueId = "00000000-0000-4000-8000-000000000203";
+    await outboxRepository.enqueue({
+      tenantId,
+      eventType: "blog_draft.v1",
+      idempotencyKey: "draft-decided-1",
+      payload: {
+        draft_id: issueId,
+        title: "Founder-led GTM teardown",
+      },
+    });
+    await approvalFeedbackRepository.record({
+      tenantId,
+      issueId,
+      outputType: "blog_draft.v1",
+      action: "approved",
+      learnOptIn: true,
+    });
+
+    const app = createApp({ outboxRepository, approvalFeedbackRepository });
+    const res = await app.request(
+      "http://localhost/v1/approvals?outputType=blog_draft.v1",
+      { headers: { "X-Tenant-Id": tenantId } },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { total: number };
+    expect(body.total).toBe(0);
+  });
+
   it("returns 400 when X-Tenant-Id is missing", async () => {
     const app = createApp({ outboxRepository: new InMemoryOutboxRepository() });
     const res = await app.request("http://localhost/v1/approvals");
@@ -1000,7 +1095,8 @@ describe("GET /v1/approvals", () => {
 describe("POST /v1/approvals/decide", () => {
   it("records an approval decision and returns 202", async () => {
     const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
-    const app = createApp({ approvalFeedbackRepository });
+    const outboxRepository = new InMemoryOutboxRepository();
+    const app = createApp({ approvalFeedbackRepository, outboxRepository });
 
     const res = await app.request("http://localhost/v1/approvals/decide", {
       method: "POST",
@@ -1025,11 +1121,25 @@ describe("POST /v1/approvals/decide", () => {
     expect(body.accepted).toBe(true);
     expect(body.action).toBe("approved");
     expect(body.feedbackId).toBeDefined();
+
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      eventType: "learning.signal.v1",
+      payload: {
+        learningId: body.feedbackId,
+        source: "founder_approval",
+        action: "approved",
+      },
+    });
   });
 
   it("accepts reject decision with reviewerNote", async () => {
     const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
-    const app = createApp({ approvalFeedbackRepository });
+    const app = createApp({
+      approvalFeedbackRepository,
+      outboxRepository: new InMemoryOutboxRepository(),
+    });
 
     const res = await app.request("http://localhost/v1/approvals/decide", {
       method: "POST",
@@ -1051,7 +1161,10 @@ describe("POST /v1/approvals/decide", () => {
 
   it("returns 400 for invalid action value", async () => {
     const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
-    const app = createApp({ approvalFeedbackRepository });
+    const app = createApp({
+      approvalFeedbackRepository,
+      outboxRepository: new InMemoryOutboxRepository(),
+    });
 
     const res = await app.request("http://localhost/v1/approvals/decide", {
       method: "POST",
@@ -1500,7 +1613,10 @@ describe("/v1/settings", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { tenantId: string; settings: Record<string, unknown> };
+    const body = (await res.json()) as {
+      tenantId: string;
+      settings: Record<string, unknown>;
+    };
     expect(body.tenantId).toBe(tenantId);
     expect(body.settings).toEqual({});
   });
@@ -1521,6 +1637,89 @@ describe("/v1/settings", () => {
     expect(body.settings.digestEmail).toBe("ceo@acme.io");
   });
 
+  it("PATCH /v1/settings validates adaptive GTM control settings", async () => {
+    const tenantSettingsRepository = new InMemoryTenantSettingsRepository();
+    const app = createApp({ tenantSettingsRepository });
+
+    const res = await app.request("http://localhost/v1/settings", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        adaptiveGtm: {
+          productProfile: {
+            schemaVersion: "gtm_product_profile.v1",
+            tenantId,
+            product: {
+              name: "Acme",
+              description: "A sufficiently detailed SaaS product description.",
+              category: "Analytics",
+              businessModel: "b2b_saas",
+              salesMotion: "hybrid",
+              valuePropositions: ["Faster decisions"],
+            },
+            audiences: [
+              {
+                id: "operators",
+                name: "Operators",
+                pains: ["Slow reporting"],
+                desiredOutcomes: ["Faster insight"],
+              },
+            ],
+            funnel: {
+              awarenessEvent: "qualified_visit",
+              activationEvent: "dashboard_created",
+              conversionEvent: "subscription_started",
+              retentionEvent: "weekly_active_account",
+              salesCycleDays: 30,
+            },
+            goals: [
+              {
+                metric: "qualified_pipeline",
+                direction: "increase",
+                target: 100000,
+                horizonDays: 90,
+              },
+            ],
+            constraints: {
+              monthlyBudget: 10000,
+              currencies: ["USD"],
+              prohibitedClaims: [],
+              prohibitedChannels: [],
+              regulatedIndustry: false,
+            },
+          },
+        },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { settings: Record<string, unknown> };
+    expect(body.settings.adaptiveGtm).toBeDefined();
+  });
+
+  it("PATCH /v1/settings rejects malformed adaptive GTM settings", async () => {
+    const tenantSettingsRepository = new InMemoryTenantSettingsRepository();
+    const app = createApp({ tenantSettingsRepository });
+
+    const res = await app.request("http://localhost/v1/settings", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        adaptiveGtm: {
+          productProfile: { schemaVersion: "wrong-version" },
+        },
+      }),
+    });
+
+    expect(res.status).toBe(422);
+  });
+
   it("PATCH /v1/settings shallow-merges subsequent patches", async () => {
     const tenantSettingsRepository = new InMemoryTenantSettingsRepository();
     const app = createApp({ tenantSettingsRepository });
@@ -1528,7 +1727,10 @@ describe("/v1/settings", () => {
     await app.request("http://localhost/v1/settings", {
       method: "PATCH",
       headers: { "content-type": "application/json", "X-Tenant-Id": tenantId },
-      body: JSON.stringify({ companyName: "Acme", logoUrl: "https://cdn.acme.io/logo.svg" }),
+      body: JSON.stringify({
+        companyName: "Acme",
+        logoUrl: "https://cdn.acme.io/logo.svg",
+      }),
     });
     const res = await app.request("http://localhost/v1/settings", {
       method: "PATCH",
@@ -1560,7 +1762,9 @@ describe("/v1/settings", () => {
   });
 
   it("GET /v1/settings returns 400 when X-Tenant-Id is missing", async () => {
-    const app = createApp({ tenantSettingsRepository: new InMemoryTenantSettingsRepository() });
+    const app = createApp({
+      tenantSettingsRepository: new InMemoryTenantSettingsRepository(),
+    });
     const res = await app.request("http://localhost/v1/settings");
     expect(res.status).toBe(400);
   });
@@ -1605,6 +1809,470 @@ describe("/v1/settings", () => {
 });
 
 // ---------------------------------------------------------------------------
+// /v1/n8n
+// ---------------------------------------------------------------------------
+
+describe("/v1/n8n", () => {
+  const n8nSignal = {
+    eventId: "evt_reply_1",
+    source: "mixmax",
+    signalType: "icp",
+    occurredAt: "2026-07-06T07:00:00.000Z",
+    workflowId: "wf_gtm_signal",
+    executionId: "exec_1",
+    payload: {
+      channel: "email",
+      sourceRecordId: "mixmax-reply-1",
+      actor: { company: "Acme", name: "Buyer" },
+      subject: "Reply from Acme",
+      text: "Can we talk tomorrow?",
+      metadata: { accountId: "acct_1" },
+    },
+  };
+
+  const sign = (body: string, secret: string): string =>
+    createHmac("sha256", secret).update(body).digest("hex");
+
+  it("accepts signed n8n signals without bearer auth", async () => {
+    const signalEventsRepository = new InMemorySignalEventsRepository();
+    const secret = "n8n-test-secret";
+    const body = JSON.stringify(n8nSignal);
+    const app = createApp({
+      apiServiceToken: "growthos-token",
+      signalEventsRepository,
+      n8nSharedSecret: secret,
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+        "Idempotency-Key": "evt_reply_1",
+        "X-GrowthOS-Signature": sign(body, secret),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(202);
+    const payload = (await res.json()) as {
+      accepted: boolean;
+      inserted: boolean;
+      signalId: string;
+    };
+    expect(payload).toMatchObject({ accepted: true, inserted: true });
+
+    const signals = await signalEventsRepository.listUnprocessed(
+      tenantId,
+      "icp",
+      10,
+    );
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.source).toBe("n8n:mixmax");
+    expect(signals[0]?.externalId).toBe("evt_reply_1");
+    expect(signals[0]?.payload).toMatchObject({
+      channel: "email",
+      sourceRecordId: "mixmax-reply-1",
+      metadata: { accountId: "acct_1" },
+      n8n: {
+        eventId: "evt_reply_1",
+        workflowId: "wf_gtm_signal",
+        executionId: "exec_1",
+      },
+    });
+  });
+
+  it("rejects n8n signals with bad signature", async () => {
+    const body = JSON.stringify(n8nSignal);
+    const app = createApp({
+      signalEventsRepository: new InMemorySignalEventsRepository(),
+      n8nSharedSecret: "n8n-test-secret",
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+        "Idempotency-Key": "evt_reply_1",
+        "X-GrowthOS-Signature": "0".repeat(64),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("fails closed when n8n signal authentication is not configured", async () => {
+    const app = createApp({
+      signalEventsRepository: new InMemorySignalEventsRepository(),
+    });
+    const res = await app.request("http://localhost/v1/n8n/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+        "Idempotency-Key": "evt_reply_1",
+      },
+      body: JSON.stringify(n8nSignal),
+    });
+
+    expect(res.status).toBe(503);
+  });
+
+  it("rejects n8n signals with missing tenant", async () => {
+    const body = JSON.stringify(n8nSignal);
+    const secret = "n8n-test-secret";
+    const app = createApp({
+      signalEventsRepository: new InMemorySignalEventsRepository(),
+      n8nSharedSecret: secret,
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "Idempotency-Key": "evt_reply_1",
+        "X-GrowthOS-Signature": sign(body, secret),
+      },
+      body,
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("deduplicates duplicate n8n event ids", async () => {
+    const signalEventsRepository = new InMemorySignalEventsRepository();
+    const secret = "n8n-test-secret";
+    const body = JSON.stringify(n8nSignal);
+    const app = createApp({
+      signalEventsRepository,
+      n8nSharedSecret: secret,
+    });
+
+    const request = {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+        "Idempotency-Key": "evt_reply_1",
+        "X-GrowthOS-Signature": sign(body, secret),
+      },
+      body,
+    };
+
+    const first = await app.request("http://localhost/v1/n8n/signals", request);
+    const second = await app.request(
+      "http://localhost/v1/n8n/signals",
+      request,
+    );
+
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    expect(await second.json()).toMatchObject({ inserted: false });
+    expect(
+      await signalEventsRepository.listUnprocessed(tenantId, "icp", 10),
+    ).toHaveLength(1);
+  });
+
+  it("enqueues approved n8n dispatch requests", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const externalActionsRepository = new InMemoryExternalActionsRepository(
+      outboxRepository,
+    );
+    const app = createApp({
+      apiServiceToken: "growthos-token",
+      outboxRepository,
+      externalActionsRepository,
+      n8nSharedSecret: "n8n-test-secret",
+      n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+      n8nDispatchResultCallbackUrl:
+        "https://api.example/v1/n8n/dispatch-results",
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer growthos-token",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        tenantId,
+        actionId: "act_1",
+        actionType: "email.send",
+        approvedBy: "founder",
+        idempotencyKey: "act_1",
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
+      }),
+    });
+
+    expect(res.status).toBe(202);
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.eventType).toBe("n8n.dispatch.requested.v1");
+    expect(events[0]?.payload).toMatchObject({
+      actionId: "act_1",
+      actionType: "email.send",
+    });
+    expect(
+      await externalActionsRepository.getByActionId(tenantId, "act_1"),
+    ).toMatchObject({ state: "requested" });
+  });
+
+  it("rejects a service dispatch that attempts to spoof another tenant", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const externalActionsRepository = new InMemoryExternalActionsRepository(
+      outboxRepository,
+    );
+    const app = createApp({
+      apiServiceToken: "growthos-token",
+      outboxRepository,
+      externalActionsRepository,
+      n8nSharedSecret: "n8n-test-secret",
+      n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+      n8nDispatchResultCallbackUrl:
+        "https://api.example/v1/n8n/dispatch-results",
+    });
+    const otherTenantId = "00000000-0000-4000-8000-000000000002";
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer growthos-token",
+        "X-Tenant-Id": tenantId,
+      },
+      body: JSON.stringify({
+        tenantId: otherTenantId,
+        actionId: "act_cross_tenant",
+        actionType: "email.send",
+        approvedBy: "founder",
+        idempotencyKey: "act_cross_tenant",
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(await outboxRepository.listUnconsumed(tenantId, 10)).toHaveLength(0);
+    expect(
+      await outboxRepository.listUnconsumed(otherTenantId, 10),
+    ).toHaveLength(0);
+  });
+
+  it("requires the tenant header for a service dispatch", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const app = createApp({
+      apiServiceToken: "growthos-token",
+      outboxRepository,
+      externalActionsRepository: new InMemoryExternalActionsRepository(
+        outboxRepository,
+      ),
+      n8nSharedSecret: "n8n-test-secret",
+      n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+      n8nDispatchResultCallbackUrl:
+        "https://api.example/v1/n8n/dispatch-results",
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer growthos-token",
+      },
+      body: JSON.stringify({
+        tenantId,
+        actionId: "act_without_header",
+        actionType: "email.send",
+        approvedBy: "founder",
+        idempotencyKey: "act_without_header",
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await outboxRepository.listUnconsumed(tenantId, 10)).toHaveLength(0);
+  });
+
+  it("records a signed n8n terminal dispatch callback exactly once", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const externalActionsRepository = new InMemoryExternalActionsRepository(
+      outboxRepository,
+    );
+    const secret = "n8n-test-secret";
+    const app = createApp({
+      outboxRepository,
+      externalActionsRepository,
+      n8nSharedSecret: secret,
+      n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+      n8nDispatchResultCallbackUrl:
+        "https://api.example/v1/n8n/dispatch-results",
+    });
+    await externalActionsRepository.enqueueRequested({
+      tenantId,
+      actionId: "act_callback_1",
+      actionType: "email.send",
+      approvedBy: "founder",
+      idempotencyKey: "act_callback_1",
+      requestPayload: {
+        channel: "email",
+        to: ["buyer@example.com"],
+        subject: "Hello",
+        text: "Hello from GrowthOS.",
+      },
+    });
+    const callback = {
+      tenantId,
+      actionId: "act_callback_1",
+      idempotencyKey: "act_callback_1",
+      callbackId: "n8n-execution-1:completed",
+      status: "completed",
+      executionId: "n8n-execution-1",
+      outcome: { delivered: true, providerMessageId: "msg-1" },
+    };
+    const body = JSON.stringify(callback);
+    const request = {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-GrowthOS-Signature": sign(body, secret),
+      },
+      body,
+    };
+
+    const first = await app.request(
+      "http://localhost/v1/n8n/dispatch-results",
+      request,
+    );
+    const duplicate = await app.request(
+      "http://localhost/v1/n8n/dispatch-results",
+      request,
+    );
+
+    expect(first.status).toBe(202);
+    expect(await duplicate.json()).toMatchObject({ duplicate: true });
+    expect(
+      await externalActionsRepository.getByActionId(tenantId, "act_callback_1"),
+    ).toMatchObject({
+      state: "completed",
+      executionId: "n8n-execution-1",
+      outcome: { delivered: true, providerMessageId: "msg-1" },
+    });
+    expect(
+      (await outboxRepository.listUnconsumed(tenantId, 10)).map(
+        (event) => event.eventType,
+      ),
+    ).toContain("external_action.completed.v1");
+  });
+
+  it("rejects n8n terminal callbacks with an invalid signature", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const app = createApp({
+      outboxRepository,
+      externalActionsRepository: new InMemoryExternalActionsRepository(
+        outboxRepository,
+      ),
+      n8nSharedSecret: "n8n-test-secret",
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch-results", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-GrowthOS-Signature": "0".repeat(64),
+      },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("protects n8n dispatch with the service token", async () => {
+    const app = createApp({
+      apiServiceToken: "growthos-token",
+      outboxRepository: new InMemoryOutboxRepository(),
+      n8nDispatchWebhookUrl: "https://n8n.example/webhook/dispatch",
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tenantId,
+        actionId: "act_1",
+        actionType: "email.send",
+        approvedBy: "founder",
+        idempotencyKey: "act_1",
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
+      }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 503 when n8n dispatch is not configured", async () => {
+    const app = createApp({
+      outboxRepository: new InMemoryOutboxRepository(),
+    });
+
+    const res = await app.request("http://localhost/v1/n8n/dispatch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tenantId,
+        actionId: "act_1",
+        actionType: "email.send",
+        approvedBy: "founder",
+        idempotencyKey: "act_1",
+        payload: {
+          channel: "email",
+          to: ["buyer@example.com"],
+          subject: "Hello",
+          text: "Hello from GrowthOS.",
+        },
+      }),
+    });
+
+    expect(res.status).toBe(503);
+  });
+
+  it("returns 503 when signal repository is unavailable", async () => {
+    const app = createApp();
+    const res = await app.request("http://localhost/v1/n8n/signals", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Tenant-Id": tenantId,
+        "Idempotency-Key": "evt_reply_1",
+      },
+      body: JSON.stringify(n8nSignal),
+    });
+
+    expect(res.status).toBe(503);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // /v1/digest
 // ---------------------------------------------------------------------------
 
@@ -1613,6 +2281,7 @@ describe("/v1/digest", () => {
     const motionStackRepository = new InMemoryMotionStackRepository();
     const outboxRepository = new InMemoryOutboxRepository();
     const approvalFeedbackRepository = new InMemoryApprovalFeedbackRepository();
+    const signalEventsRepository = new InMemorySignalEventsRepository();
 
     // Seed motion score + stack
     await motionStackRepository.recordScore({
@@ -1637,12 +2306,16 @@ describe("/v1/digest", () => {
     });
 
     // Seed pending outbox approval item
-    await outboxRepository.enqueue({
+    const pendingDigestEvent = await outboxRepository.enqueue({
       tenantId,
       eventType: "blog_draft.v1",
       idempotencyKey: "digest-pending-1",
-      payload: { draft_id: "d-1", title: "Draft 1" },
+      payload: {
+        draft_id: "00000000-0000-4000-8000-000000000903",
+        title: "Draft 1",
+      },
     });
+    await outboxRepository.markConsumed(tenantId, pendingDigestEvent.id);
 
     // Seed one approved and one rejected decision
     await approvalFeedbackRepository.record({
@@ -1660,10 +2333,21 @@ describe("/v1/digest", () => {
       learnOptIn: true,
     });
 
+    await signalEventsRepository.ingest({
+      tenantId,
+      signalType: "community",
+      source: "reddit",
+      externalId: "digest-signal-1",
+      payload: {
+        text: "Founder asks about GTM signal automation.",
+      },
+    });
+
     const app = createApp({
       motionStackRepository,
       outboxRepository,
       approvalFeedbackRepository,
+      signalEventsRepository,
     });
 
     const res = await app.request("http://localhost/v1/digest/weekly", {
@@ -1681,7 +2365,7 @@ describe("/v1/digest", () => {
     expect(body.approvals.pending).toBe(1);
     expect(body.motionStack.primaryMotions).toEqual(["inbound_content"]);
     expect(body.motionStack.topMotion).toBe("inbound_content");
-    expect(body.signalCount).toBe(0);
+    expect(body.signalCount).toBe(1);
   });
 
   it("POST /v1/digest/send returns sent=false when Postal is not configured", async () => {
@@ -1756,7 +2440,10 @@ describe("/v1/digest", () => {
     try {
       const res = await app.request("http://localhost/v1/digest/send", {
         method: "POST",
-        headers: { "X-Tenant-Id": tenantId, "content-type": "application/json" },
+        headers: {
+          "X-Tenant-Id": tenantId,
+          "content-type": "application/json",
+        },
         body: JSON.stringify({}),
       });
 
@@ -1791,7 +2478,10 @@ describe("/v1/digest", () => {
     try {
       const res = await app.request("http://localhost/v1/digest/send", {
         method: "POST",
-        headers: { "X-Tenant-Id": tenantId, "content-type": "application/json" },
+        headers: {
+          "X-Tenant-Id": tenantId,
+          "content-type": "application/json",
+        },
         body: JSON.stringify({}),
       });
 

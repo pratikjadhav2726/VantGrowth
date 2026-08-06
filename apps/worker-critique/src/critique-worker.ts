@@ -26,7 +26,7 @@ import type {
   OutboxRepository,
   PlaybookVersionsRepository,
 } from "@growthos/db";
-import { tenantScopedSubject } from "@growthos/db";
+import { blogDraftV1Schema, deterministicUuid } from "@growthos/core";
 import {
   CRITIQUE_EVALUATE_PROMPT,
   type LlmCallRunner,
@@ -55,7 +55,9 @@ export const CRITIQUE_APPROVE_THRESHOLD = (() => {
 
 export const CRITIQUE_REVISE_THRESHOLD = (() => {
   const v = Number(process.env.CRITIQUE_REVISE_THRESHOLD);
-  return Number.isFinite(v) && v > 0 && v < CRITIQUE_APPROVE_THRESHOLD ? v : 0.5;
+  return Number.isFinite(v) && v > 0 && v < CRITIQUE_APPROVE_THRESHOLD
+    ? v
+    : 0.5;
 })();
 
 const verdictFromScore = (score: number): "approve" | "revise" | "reject" => {
@@ -131,7 +133,8 @@ export interface EventPublisher {
 
 export interface CritiqueWorkerDependencies {
   outboxRepository: OutboxRepository;
-  eventPublisher: EventPublisher;
+  /** Delivery is outbox-only; retained as an optional compatibility seam. */
+  eventPublisher?: EventPublisher;
   /**
    * Optional: when provided the worker calls CRITIQUE_EVALUATE_PROMPT for
    * an LLM-driven verdict.  Falls back to playbook or heuristic on failure.
@@ -198,7 +201,11 @@ export const critiqueWithLlm = async (
         candidateOutput: request.candidateOutput,
         rubricCriteria: rubricHint,
       },
-      { tenantId: request.tenantId, agentId: "critique-worker" },
+      {
+        tenantId: request.tenantId,
+        agentId: "critique-worker",
+        responseFormat: { type: "json_object" },
+      },
     );
     content = result.content;
   } catch {
@@ -214,6 +221,27 @@ export const critiqueWithLlm = async (
   } catch {
     return null;
   }
+};
+
+/**
+ * Converts a generated blog draft into the versioned quality-gate input. The
+ * deterministic critique id makes JetStream redelivery harmless and keeps the
+ * output traceable to the exact draft revision.
+ */
+export const createBlogDraftCritiqueRequest = (input: unknown): CritiqueRequest => {
+  const draft = blogDraftV1Schema.parse(input);
+  return critiqueRequestSchema.parse({
+    tenantId: draft.tenant_id,
+    critiqueId: deterministicUuid(`critique:blog-draft:${draft.draft_id}`),
+    dedupeKey: `critique:blog-draft:${draft.draft_id}:iteration:${draft.iteration}`,
+    source: "blog_draft_worker",
+    artifactKind: "blog_draft.v1",
+    artifactId: draft.draft_id,
+    ...(draft.experiment_id ? { experimentId: draft.experiment_id } : {}),
+    promptVersion: "blog_draft.v1",
+    candidateOutput: draft.body_markdown,
+    reviewerNotes: [],
+  });
 };
 
 export class CritiqueWorker {
@@ -242,6 +270,10 @@ export class CritiqueWorker {
       source: result.source,
       artifact_kind: result.artifactKind,
       artifact_id: result.artifactId,
+      ...(result.experimentId
+        ? { experiment_id: result.experimentId }
+        : {}),
+      ...(result.changeRisk ? { change_risk: result.changeRisk } : {}),
       prompt_version: result.promptVersion,
       verdict: result.verdict,
       confidence_score: result.confidenceScore,
@@ -255,11 +287,6 @@ export class CritiqueWorker {
       idempotencyKey: result.dedupeKey,
       payload,
     });
-
-    await this.deps.eventPublisher.publish(
-      tenantScopedSubject(result.tenantId, "critique.completed.v1"),
-      payload,
-    );
 
     return result;
   }

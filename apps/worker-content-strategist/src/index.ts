@@ -15,11 +15,11 @@
  *   DATABASE_URL                     — Postgres connection string
  */
 
+import { startDurableJetStreamConsumer } from "@growthos/core";
 import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
+import { OpenAiLlmCallRunner } from "@growthos/llm-harness";
 import { createLogger, initOtelSdk } from "@growthos/observability";
-import { JSONCodec, connect } from "nats";
 import { ContentStrategistWorker } from "./content-strategist-worker.js";
-import { NatsJetStreamPublisher } from "./nats-publisher.js";
 
 const log = createLogger("growthos.worker-content-strategist");
 
@@ -29,45 +29,88 @@ export const createContentStrategistWorkerFromEnv =
     const outboxRepository = new PostgresOutboxRepository(db, {
       actorKind: "system",
     });
-    const eventPublisher = await NatsJetStreamPublisher.connect();
 
-    return new ContentStrategistWorker({ outboxRepository, eventPublisher });
+    return new ContentStrategistWorker({
+      outboxRepository,
+      ...(process.env.OPENAI_API_KEY
+        ? { llmCallRunner: OpenAiLlmCallRunner.fromEnv() }
+        : {}),
+    });
   };
 
 const startIntelBriefConsumer = async (
   worker: ContentStrategistWorker,
+  outboxRepository: PostgresOutboxRepository,
 ): Promise<void> => {
-  const connection = await connect({
-    servers: process.env.NATS_SERVERS ?? "nats://localhost:4222",
-    name:
-      process.env.NATS_CLIENT_NAME ??
-      "growthos-worker-content-strategist-consumer",
-  });
-
-  const codec = JSONCodec<Record<string, unknown>>();
   const subject =
     process.env.CONTENT_BRIEF_REQUEST_SUBJECT ?? "t.*.intel_brief.v1";
   const queueGroup =
     process.env.CONTENT_BRIEF_QUEUE_GROUP ??
     "growthos-worker-content-strategist";
 
-  const subscription = connection.subscribe(subject, { queue: queueGroup });
-
-  void (async () => {
-    for await (const message of subscription) {
-      try {
-        await worker.processBrief(codec.decode(message.data));
-      } catch (error) {
-        log.error({ err: error }, "content strategist brief processing failed");
-      }
-    }
-  })();
+  await startDurableJetStreamConsumer(
+    {
+      servers: process.env.NATS_SERVERS ?? "nats://localhost:4222",
+      streamName: process.env.GROWTHOS_JETSTREAM_STREAM ?? "GROWTHOS",
+      subject,
+      durableName:
+        process.env.CONTENT_BRIEF_DURABLE_NAME ??
+        "growthos_content_strategist",
+      queueGroup,
+      clientName:
+        process.env.NATS_CLIENT_NAME ?? "growthos-worker-content-strategist",
+      ackWaitMs: Number(process.env.CONTENT_BRIEF_ACK_WAIT_MS ?? "60000"),
+      maxDeliver: Number(process.env.CONTENT_BRIEF_MAX_DELIVER ?? "5"),
+      retryDelayMs: Number(process.env.CONTENT_BRIEF_RETRY_DELAY_MS ?? "5000"),
+      maxAckPending: Number(
+        process.env.CONTENT_BRIEF_MAX_ACK_PENDING ?? "25",
+      ),
+    },
+    async (payload) => {
+      await worker.processBrief(payload);
+    },
+    {
+      onError: (error, context) => {
+        log.error(
+          { err: error, subject: context.subject, sequence: context.streamSequence },
+          "content strategist brief processing failed",
+        );
+      },
+      onExhausted: async (payload, context, error) => {
+        const tenantId = payload?.tenant_id;
+        if (typeof tenantId !== "string") throw error;
+        await outboxRepository.enqueue({
+          tenantId,
+          eventType: "worker.dead_lettered.v1",
+          idempotencyKey: `content-strategist:${context.streamSequence}`,
+          payload: {
+            worker: "content_strategist",
+            source_subject: context.subject,
+            stream_sequence: context.streamSequence,
+            redelivery_count: context.redeliveryCount,
+            error: error.message,
+            failed_payload: payload,
+            occurred_at: new Date().toISOString(),
+          },
+        });
+      },
+    },
+  );
 };
 
 if (process.env.WORKER_BOOTSTRAP === "true") {
   initOtelSdk({ serviceName: "growthos.worker-content-strategist" });
-  const worker = await createContentStrategistWorkerFromEnv();
-  await startIntelBriefConsumer(worker);
+  const db = createDbFromEnv();
+  const outboxRepository = new PostgresOutboxRepository(db, {
+    actorKind: "system",
+  });
+  const worker = new ContentStrategistWorker({
+    outboxRepository,
+    ...(process.env.OPENAI_API_KEY
+      ? { llmCallRunner: OpenAiLlmCallRunner.fromEnv() }
+      : {}),
+  });
+  await startIntelBriefConsumer(worker, outboxRepository);
   log.info(
     {
       subject:

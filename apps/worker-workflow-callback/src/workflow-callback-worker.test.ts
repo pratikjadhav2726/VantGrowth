@@ -1,3 +1,4 @@
+import { StubBillingClient } from "@growthos/billing";
 import type { TenantProvisioningRuntimeState } from "@growthos/core";
 import {
   StubGiteaProvisioningClient,
@@ -5,16 +6,14 @@ import {
   StubNatsProvisioningClient,
   StubPaperclipProvisioningClient,
 } from "@growthos/core";
-import { StubZitadelClient } from "@growthos/identity";
-import { StubBillingClient } from "@growthos/billing";
 import {
   InMemoryOutboxRepository,
   InMemoryWorkflowRunRepository,
 } from "@growthos/db";
+import { StubZitadelClient } from "@growthos/identity";
 import { EnvSecretManager, TenantSecretsService } from "@growthos/secrets";
 import { describe, expect, it, vi } from "vitest";
 import {
-  type EventPublisher,
   type ProvisioningClients,
   type RuntimeStateVerifier,
   WorkflowCallbackWorker,
@@ -23,12 +22,9 @@ import {
 const tenantId = "00000000-0000-4000-8000-000000000001";
 
 describe("WorkflowCallbackWorker", () => {
-  it("emits tenant provisioning completed event into outbox and tenant subject", async () => {
+  it("writes tenant provisioning completion lifecycle only to the outbox", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
     const workflowRunRepository = new InMemoryWorkflowRunRepository();
-    const eventPublisher: EventPublisher = {
-      publish: vi.fn(async () => undefined),
-    };
     const runtimeStateVerifier: RuntimeStateVerifier = {
       getTenantProvisioningRuntimeState: vi.fn(
         async () =>
@@ -51,7 +47,6 @@ describe("WorkflowCallbackWorker", () => {
     const worker = new WorkflowCallbackWorker({
       outboxRepository,
       workflowRunRepository,
-      eventPublisher,
       runtimeStateVerifier,
     });
 
@@ -65,23 +60,6 @@ describe("WorkflowCallbackWorker", () => {
     });
 
     expect(result.state).toBe("completed");
-    expect(eventPublisher.publish).toHaveBeenCalledTimes(2);
-    expect(eventPublisher.publish).toHaveBeenNthCalledWith(
-      1,
-      `t.${tenantId}.workflow.tenant_provisioning.progress.v1`,
-      expect.objectContaining({
-        workflow_id: "wf-provision-1",
-        progress_step: "paperclip.company.created",
-      }),
-    );
-    expect(eventPublisher.publish).toHaveBeenNthCalledWith(
-      2,
-      `t.${tenantId}.workflow.tenant_provisioning.completed.v1`,
-      expect.objectContaining({
-        workflow_id: "wf-provision-1",
-        status: "accepted",
-      }),
-    );
 
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
     expect(events).toHaveLength(2);
@@ -91,6 +69,14 @@ describe("WorkflowCallbackWorker", () => {
     expect(events[1]?.eventType).toBe(
       "workflow.tenant_provisioning.completed.v1",
     );
+    expect(events[0]?.payload).toMatchObject({
+      workflow_id: "wf-provision-1",
+      progress_step: "paperclip.company.created",
+    });
+    expect(events[1]?.payload).toMatchObject({
+      workflow_id: "wf-provision-1",
+      status: "accepted",
+    });
     const run = await workflowRunRepository.getByWorkflowId(
       tenantId,
       "wf-provision-1",
@@ -116,7 +102,6 @@ describe("WorkflowCallbackWorker", () => {
     const worker = new WorkflowCallbackWorker({
       outboxRepository,
       workflowRunRepository,
-      eventPublisher: { publish: vi.fn(async () => undefined) },
       runtimeStateVerifier,
     });
     const request = {
@@ -135,12 +120,51 @@ describe("WorkflowCallbackWorker", () => {
     expect(events).toHaveLength(1);
   });
 
+  it("propagates durable lifecycle write failures for JetStream redelivery", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const workflowRunRepository = new InMemoryWorkflowRunRepository();
+    const worker = new WorkflowCallbackWorker({
+      outboxRepository,
+      workflowRunRepository,
+      runtimeStateVerifier: {
+        getTenantProvisioningRuntimeState: vi.fn(
+          async () =>
+            ({
+              workflowId: "wf-provision-retry",
+              tenantId,
+              state: "completed",
+              history: [],
+            }) satisfies TenantProvisioningRuntimeState,
+        ),
+      },
+    });
+    vi.spyOn(outboxRepository, "enqueue").mockRejectedValueOnce(
+      new Error("outbox unavailable"),
+    );
+
+    await expect(
+      worker.processTenantProvisioningCompletion({
+        tenantId,
+        workflowId: "wf-provision-retry",
+        dedupeKey: "wf-provision-retry",
+        tenantExternalId: "ten_lat_01",
+        tenantName: "Lattice",
+        requestedBy: "founder",
+      }),
+    ).rejects.toThrow("outbox unavailable");
+
+    expect(
+      await workflowRunRepository.getByWorkflowId(
+        tenantId,
+        "wf-provision-retry",
+      ),
+    ).toMatchObject({ state: "in_progress" });
+    expect(await outboxRepository.listUnconsumed(tenantId, 10)).toHaveLength(0);
+  });
+
   it("emits failed event and transitions run to failed when runtime is failed", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
     const workflowRunRepository = new InMemoryWorkflowRunRepository();
-    const eventPublisher: EventPublisher = {
-      publish: vi.fn(async () => undefined),
-    };
     const runtimeStateVerifier: RuntimeStateVerifier = {
       getTenantProvisioningRuntimeState: vi.fn(
         async () =>
@@ -158,7 +182,6 @@ describe("WorkflowCallbackWorker", () => {
     const worker = new WorkflowCallbackWorker({
       outboxRepository,
       workflowRunRepository,
-      eventPublisher,
       runtimeStateVerifier,
     });
 
@@ -172,10 +195,12 @@ describe("WorkflowCallbackWorker", () => {
     });
 
     expect(result.state).toBe("failed");
-    expect(eventPublisher.publish).toHaveBeenCalledWith(
-      `t.${tenantId}.workflow.tenant_provisioning.failed.v1`,
+    expect(await outboxRepository.listUnconsumed(tenantId, 10)).toContainEqual(
       expect.objectContaining({
-        failure_code: "PROVISIONING_TIMEOUT",
+        eventType: "workflow.tenant_provisioning.failed.v1",
+        payload: expect.objectContaining({
+          failure_code: "PROVISIONING_TIMEOUT",
+        }),
       }),
     );
     const run = await workflowRunRepository.getByWorkflowId(
@@ -212,13 +237,9 @@ describe("WorkflowCallbackWorker — orchestrator path", () => {
   it("runs all 7 provisioning steps and emits progress + completed events", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
     const workflowRunRepository = new InMemoryWorkflowRunRepository();
-    const eventPublisher: EventPublisher = {
-      publish: vi.fn(async () => undefined),
-    };
     const worker = new WorkflowCallbackWorker({
       outboxRepository,
       workflowRunRepository,
-      eventPublisher,
       runtimeStateVerifier: {
         getTenantProvisioningRuntimeState: vi.fn(async () => {
           throw new Error("should not be called on orchestrator path");
@@ -257,7 +278,6 @@ describe("WorkflowCallbackWorker — orchestrator path", () => {
     const worker = new WorkflowCallbackWorker({
       outboxRepository,
       workflowRunRepository,
-      eventPublisher: { publish: vi.fn(async () => undefined) },
       runtimeStateVerifier: {
         getTenantProvisioningRuntimeState: vi.fn(),
       },
@@ -281,11 +301,9 @@ describe("WorkflowCallbackWorker — orchestrator path", () => {
   it("is idempotent on duplicate requests after completion", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
     const workflowRunRepository = new InMemoryWorkflowRunRepository();
-    const publishFn = vi.fn(async () => undefined);
     const worker = new WorkflowCallbackWorker({
       outboxRepository,
       workflowRunRepository,
-      eventPublisher: { publish: publishFn },
       runtimeStateVerifier: { getTenantProvisioningRuntimeState: vi.fn() },
       provisioningClients: makeProvisioningClients(),
     });
@@ -297,20 +315,20 @@ describe("WorkflowCallbackWorker — orchestrator path", () => {
     };
 
     await worker.processTenantProvisioningCompletion(req);
-    const callCount = publishFn.mock.calls.length;
+    const eventCount = (await outboxRepository.listUnconsumed(tenantId, 20))
+      .length;
 
-    // Second call — already terminal, should return immediately without new publishes.
+    // Second call — already terminal, should return immediately without new events.
     const result2 = await worker.processTenantProvisioningCompletion(req);
     expect(result2.state).toBe("completed");
-    expect(publishFn.mock.calls.length).toBe(callCount);
+    expect(await outboxRepository.listUnconsumed(tenantId, 20)).toHaveLength(
+      eventCount,
+    );
   });
 
   it("emits failed event and transitions run to failed when orchestrator throws", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
     const workflowRunRepository = new InMemoryWorkflowRunRepository();
-    const eventPublisher: EventPublisher = {
-      publish: vi.fn(async () => undefined),
-    };
 
     const failingClients: ProvisioningClients = {
       ...makeProvisioningClients(),
@@ -324,7 +342,6 @@ describe("WorkflowCallbackWorker — orchestrator path", () => {
     const worker = new WorkflowCallbackWorker({
       outboxRepository,
       workflowRunRepository,
-      eventPublisher,
       runtimeStateVerifier: { getTenantProvisioningRuntimeState: vi.fn() },
       provisioningClients: failingClients,
     });
@@ -337,9 +354,13 @@ describe("WorkflowCallbackWorker — orchestrator path", () => {
 
     expect(result.state).toBe("failed");
     expect(result.failureCode).toBe("PROVISIONING_ERROR");
-    expect(eventPublisher.publish).toHaveBeenCalledWith(
-      `t.${tenantId}.workflow.tenant_provisioning.failed.v1`,
-      expect.objectContaining({ failure_code: "PROVISIONING_ERROR" }),
+    expect(await outboxRepository.listUnconsumed(tenantId, 20)).toContainEqual(
+      expect.objectContaining({
+        eventType: "workflow.tenant_provisioning.failed.v1",
+        payload: expect.objectContaining({
+          failure_code: "PROVISIONING_ERROR",
+        }),
+      }),
     );
     const run = await workflowRunRepository.getByWorkflowId(
       tenantId,
@@ -372,7 +393,6 @@ describe("WorkflowCallbackWorker — secrets provisioning", () => {
 
     const outbox = new InMemoryOutboxRepository();
     const wfRuns = new InMemoryWorkflowRunRepository();
-    const publisher: EventPublisher = { publish: vi.fn(async () => undefined) };
 
     // Set env vars before running so the worker picks them up.
     const originalEnv = process.env.TENANT_OPENAI_API_KEY;
@@ -381,7 +401,6 @@ describe("WorkflowCallbackWorker — secrets provisioning", () => {
     const worker = new WorkflowCallbackWorker({
       outboxRepository: outbox,
       workflowRunRepository: wfRuns,
-      eventPublisher: publisher,
       runtimeStateVerifier: {
         getTenantProvisioningRuntimeState: vi.fn(async () => {
           throw new Error("not used");
@@ -405,12 +424,10 @@ describe("WorkflowCallbackWorker — secrets provisioning", () => {
   it("does not call provisionTenant when tenantSecretsService is omitted", async () => {
     const outbox = new InMemoryOutboxRepository();
     const wfRuns = new InMemoryWorkflowRunRepository();
-    const publisher: EventPublisher = { publish: vi.fn(async () => undefined) };
 
     const worker = new WorkflowCallbackWorker({
       outboxRepository: outbox,
       workflowRunRepository: wfRuns,
-      eventPublisher: publisher,
       runtimeStateVerifier: {
         getTenantProvisioningRuntimeState: vi.fn(async () => {
           throw new Error("not used");

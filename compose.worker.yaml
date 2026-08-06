@@ -1,0 +1,47 @@
+# GrowthOS Paperclip heartbeat worker — the GrowthOS-side executor for
+# `growthos_native` agents. Polls Paperclip for runnable issues assigned to
+# approved agents and dispatches them into the GrowthOS domain workers.
+#
+# Joins the shared GrowthOS network so it can reach Postgres and Paperclip
+# (http://paperclip:3100). The outbox-publisher service on the same network
+# forwards durable work-ready rows to JetStream.
+#
+#   docker compose -f compose.worker.yaml up -d --build
+#
+# Defaults to DRY-RUN (logs candidate work, no mutations). Set
+# PAPERCLIP_HEARTBEAT_DRY_RUN=false to actually check out + dispatch.
+
+name: growthos-worker
+
+x-env: &env
+  env_file: .env
+
+services:
+  worker-paperclip-heartbeat:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      NODE_ENV: development
+      WORKER_BOOTSTRAP: "true"
+      # PAPERCLIP_BASE_URL / PAPERCLIP_SERVICE_TOKEN come from .env.
+      # Override BASE_URL for the in-network hostname:
+      PAPERCLIP_BASE_URL: "http://paperclip:3100"
+      # PAPERCLIP_HEARTBEAT_COMPANY_IDS and the required
+      # PAPERCLIP_HEARTBEAT_COMPANY_TENANT_MAP come from .env. Live mode fails
+      # closed unless each company has an explicit GrowthOS tenant UUID.
+      PAPERCLIP_HEARTBEAT_POLL_MS: "${PAPERCLIP_HEARTBEAT_POLL_MS:-15000}"
+      PAPERCLIP_HEARTBEAT_DRY_RUN: "${PAPERCLIP_HEARTBEAT_DRY_RUN:-true}"
+    volumes:
+      - ./apps/worker-paperclip-heartbeat/src:/app/apps/worker-paperclip-heartbeat/src:ro
+      - ./packages:/app/packages:ro
+    restart: unless-stopped
+    networks:
+      growthos:
+        aliases: [worker-paperclip-heartbeat]
+
+networks:
+  growthos:
+    external: true
+    name: ${GROWTHOS_DOCKER_NETWORK:-growthos-dev_default}

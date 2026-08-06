@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { PLAN_CODE_MOTION_ACTIVE, StubBillingClient } from "@growthos/billing";
 import { StubZitadelClient } from "@growthos/identity";
-import { StubBillingClient, PLAN_CODE_MOTION_ACTIVE } from "@growthos/billing";
+import { describe, expect, it } from "vitest";
 import {
   StubGiteaProvisioningClient,
   StubMinioProvisioningClient,
@@ -9,12 +9,12 @@ import {
   StubProvisioningProgressReporter,
   TenantProvisioningOrchestrator,
   tenantBucketName,
+  tenantLagoMotionSubId,
   tenantNatsConsumerName,
   tenantNatsFilterSubject,
   tenantProvisioningInputV1Schema,
   tenantWorkspaceRepoName,
   tenantZitadelOrgName,
-  tenantLagoMotionSubId,
 } from "./tenant-provisioning.js";
 
 // ---------------------------------------------------------------------------
@@ -254,9 +254,14 @@ describe("TenantProvisioningOrchestrator", () => {
 
   it("zitadel_org step output includes orgId", async () => {
     const stubs = makeStubs();
-    const result = await new TenantProvisioningOrchestrator(stubs).run(validInput);
+    const result = await new TenantProvisioningOrchestrator(stubs).run(
+      validInput,
+    );
     const step = result.steps.find((s) => s.step === "zitadel_org");
-    expect(step?.output).toMatchObject({ orgId: expect.any(String), orgName: expect.any(String) });
+    expect(step?.output).toMatchObject({
+      orgId: expect.any(String),
+      orgName: expect.any(String),
+    });
   });
 
   it("creates Lago customer with tenantId as externalId", async () => {
@@ -268,7 +273,9 @@ describe("TenantProvisioningOrchestrator", () => {
   it("assigns motion_active plan to Lago customer", async () => {
     const stubs = makeStubs();
     await new TenantProvisioningOrchestrator(stubs).run(validInput);
-    expect(stubs.billing.assignPlanCalls[0]?.planCode).toBe(PLAN_CODE_MOTION_ACTIVE);
+    expect(stubs.billing.assignPlanCalls[0]?.planCode).toBe(
+      PLAN_CODE_MOTION_ACTIVE,
+    );
     expect(stubs.billing.assignPlanCalls[0]?.subscriptionExternalId).toBe(
       tenantLagoMotionSubId(TENANT_ID),
     );
@@ -276,8 +283,13 @@ describe("TenantProvisioningOrchestrator", () => {
 
   it("lago_customer step output includes lagoCustomerId and planCode", async () => {
     const stubs = makeStubs();
-    const result = await new TenantProvisioningOrchestrator(stubs).run(validInput);
+    const result = await new TenantProvisioningOrchestrator(stubs).run(
+      validInput,
+    );
     const step = result.steps.find((s) => s.step === "lago_customer");
-    expect(step?.output).toMatchObject({ lagoCustomerId: expect.any(String), planCode: PLAN_CODE_MOTION_ACTIVE });
+    expect(step?.output).toMatchObject({
+      lagoCustomerId: expect.any(String),
+      planCode: PLAN_CODE_MOTION_ACTIVE,
+    });
   });
 });

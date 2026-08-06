@@ -1,0 +1,2225 @@
+{
+  "id": "f28edc33-0b00-41c3-81b4-46b11252fed9",
+  "prevId": "f49d22ac-defe-4560-ae49-f94e71a49f99",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "growthos.approval_feedback": {
+      "name": "approval_feedback",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issue_id": {
+          "name": "issue_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "output_type": {
+          "name": "output_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "edit_distance": {
+          "name": "edit_distance",
+          "type": "numeric(6, 4)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rubric_failures": {
+          "name": "rubric_failures",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "reviewer_note": {
+          "name": "reviewer_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "learn_opt_in": {
+          "name": "learn_opt_in",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "approval_feedback_tenant_output_created_idx": {
+          "name": "approval_feedback_tenant_output_created_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "output_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "approval_feedback_action_check": {
+          "name": "approval_feedback_action_check",
+          "value": "\"growthos\".\"approval_feedback\".\"action\" IN ('approved', 'edited_then_approved', 'rejected', 'auto_approved')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "growthos.component_health": {
+      "name": "component_health",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "component_id": {
+          "name": "component_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "error_rate": {
+          "name": "error_rate",
+          "type": "numeric(5, 4)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consecutive_failures": {
+          "name": "consecutive_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "p95_latency_ms": {
+          "name": "p95_latency_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "staleness_seconds": {
+          "name": "staleness_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dependency_available": {
+          "name": "dependency_available",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fallback_available": {
+          "name": "fallback_available",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_known_good_available": {
+          "name": "last_known_good_available",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_known_good_version_ref": {
+          "name": "last_known_good_version_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recovery_attempts": {
+          "name": "recovery_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "guardrail_breached": {
+          "name": "guardrail_breached",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "allow_external_actions": {
+          "name": "allow_external_actions",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "retry_after_seconds": {
+          "name": "retry_after_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reasons": {
+          "name": "reasons",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "observed_at": {
+          "name": "observed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "component_health_tenant_component_observed_idx": {
+          "name": "component_health_tenant_component_observed_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "component_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "observed_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "component_health_tenant_state_observed_idx": {
+          "name": "component_health_tenant_state_observed_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "observed_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "component_health_tenant_component_idempotency_unique": {
+          "name": "component_health_tenant_component_idempotency_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "component_id",
+            "idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "component_health_state_check": {
+          "name": "component_health_state_check",
+          "value": "\"growthos\".\"component_health\".\"state\" IN ('healthy', 'degraded', 'recovering', 'quarantined')"
+        },
+        "component_health_action_check": {
+          "name": "component_health_action_check",
+          "value": "\"growthos\".\"component_health\".\"action\" IN ('none', 'resume', 'retry_with_backoff', 'use_fallback', 'rollback', 'quarantine_and_escalate')"
+        },
+        "component_health_error_rate_check": {
+          "name": "component_health_error_rate_check",
+          "value": "\"growthos\".\"component_health\".\"error_rate\" >= 0 AND \"growthos\".\"component_health\".\"error_rate\" <= 1"
+        },
+        "component_health_nonnegative_values_check": {
+          "name": "component_health_nonnegative_values_check",
+          "value": "\"growthos\".\"component_health\".\"consecutive_failures\" >= 0 AND \"growthos\".\"component_health\".\"p95_latency_ms\" >= 0 AND \"growthos\".\"component_health\".\"staleness_seconds\" >= 0 AND \"growthos\".\"component_health\".\"recovery_attempts\" >= 0"
+        },
+        "component_health_retry_after_check": {
+          "name": "component_health_retry_after_check",
+          "value": "\"growthos\".\"component_health\".\"retry_after_seconds\" IS NULL OR \"growthos\".\"component_health\".\"retry_after_seconds\" > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "growthos.event_outbox": {
+      "name": "event_outbox",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_type": {
+          "name": "event_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "consumed_at": {
+          "name": "consumed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "event_outbox_unconsumed_idx": {
+          "name": "event_outbox_unconsumed_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "consumed_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "event_outbox_idempotency_unique": {
+          "name": "event_outbox_idempotency_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "event_type",
+            "idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "growthos.experiment_assignments": {
+      "name": "experiment_assignments",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "experiment_id": {
+          "name": "experiment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entity_type": {
+          "name": "entity_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entity_id": {
+          "name": "entity_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "variant": {
+          "name": "variant",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "assignment_context": {
+          "name": "assignment_context",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "assigned_at": {
+          "name": "assigned_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "exposed_at": {
+          "name": "exposed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "experiment_assignments_tenant_experiment_variant_idx": {
+          "name": "experiment_assignments_tenant_experiment_variant_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "experiment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "variant",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "experiment_assignments_tenant_entity_idx": {
+          "name": "experiment_assignments_tenant_entity_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "entity_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "entity_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "experiment_assignments_tenant_experiment_fk": {
+          "name": "experiment_assignments_tenant_experiment_fk",
+          "tableFrom": "experiment_assignments",
+          "tableTo": "experiments",
+          "schemaTo": "growthos",
+          "columnsFrom": [
+            "tenant_id",
+            "experiment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "experiment_assignments_tenant_experiment_entity_unique": {
+          "name": "experiment_assignments_tenant_experiment_entity_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "experiment_id",
+            "entity_type",
+            "entity_id"
+          ]
+        },
+        "experiment_assignments_tenant_id_id_unique": {
+          "name": "experiment_assignments_tenant_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "experiment_assignments_variant_check": {
+          "name": "experiment_assignments_variant_check",
+          "value": "\"growthos\".\"experiment_assignments\".\"variant\" IN ('a', 'b')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "growthos.experiment_observations": {
+      "name": "experiment_observations",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "experiment_id": {
+          "name": "experiment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "assignment_id": {
+          "name": "assignment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entity_type": {
+          "name": "entity_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "entity_id": {
+          "name": "entity_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "variant": {
+          "name": "variant",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metric_name": {
+          "name": "metric_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metric_value": {
+          "name": "metric_value",
+          "type": "numeric(20, 6)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_guardrail": {
+          "name": "is_guardrail",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "attribution_confidence": {
+          "name": "attribution_confidence",
+          "type": "numeric(5, 4)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attribution_model": {
+          "name": "attribution_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cost_amount": {
+          "name": "cost_amount",
+          "type": "numeric(20, 6)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cost_currency": {
+          "name": "cost_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "observed_outcome": {
+          "name": "observed_outcome",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "evidence": {
+          "name": "evidence",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "observed_at": {
+          "name": "observed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "experiment_observations_tenant_experiment_metric_observed_idx": {
+          "name": "experiment_observations_tenant_experiment_metric_observed_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "experiment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "metric_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "observed_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "experiment_observations_tenant_experiment_variant_idx": {
+          "name": "experiment_observations_tenant_experiment_variant_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "experiment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "variant",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "experiment_observations_tenant_experiment_fk": {
+          "name": "experiment_observations_tenant_experiment_fk",
+          "tableFrom": "experiment_observations",
+          "tableTo": "experiments",
+          "schemaTo": "growthos",
+          "columnsFrom": [
+            "tenant_id",
+            "experiment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "experiment_observations_tenant_assignment_fk": {
+          "name": "experiment_observations_tenant_assignment_fk",
+          "tableFrom": "experiment_observations",
+          "tableTo": "experiment_assignments",
+          "schemaTo": "growthos",
+          "columnsFrom": [
+            "tenant_id",
+            "assignment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "experiment_observations_tenant_experiment_idempotency_unique": {
+          "name": "experiment_observations_tenant_experiment_idempotency_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "experiment_id",
+            "idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "experiment_observations_variant_check": {
+          "name": "experiment_observations_variant_check",
+          "value": "\"growthos\".\"experiment_observations\".\"variant\" IN ('a', 'b')"
+        },
+        "experiment_observations_attribution_confidence_check": {
+          "name": "experiment_observations_attribution_confidence_check",
+          "value": "\"growthos\".\"experiment_observations\".\"attribution_confidence\" >= 0 AND \"growthos\".\"experiment_observations\".\"attribution_confidence\" <= 1"
+        },
+        "experiment_observations_cost_check": {
+          "name": "experiment_observations_cost_check",
+          "value": "\"growthos\".\"experiment_observations\".\"cost_amount\" IS NULL OR \"growthos\".\"experiment_observations\".\"cost_amount\" >= 0"
+        },
+        "experiment_observations_currency_check": {
+          "name": "experiment_observations_currency_check",
+          "value": "\"growthos\".\"experiment_observations\".\"cost_currency\" IS NULL OR char_length(\"growthos\".\"experiment_observations\".\"cost_currency\") = 3"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "growthos.experiments": {
+      "name": "experiments",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "experiment_key": {
+          "name": "experiment_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "motion": {
+          "name": "motion",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "experiment_type": {
+          "name": "experiment_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "unit_type": {
+          "name": "unit_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "hypothesis": {
+          "name": "hypothesis",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "variant_a": {
+          "name": "variant_a",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "variant_b": {
+          "name": "variant_b",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metric_name": {
+          "name": "metric_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "metric_direction": {
+          "name": "metric_direction",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'increase'"
+        },
+        "min_sample_size": {
+          "name": "min_sample_size",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'draft'"
+        },
+        "winner": {
+          "name": "winner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "numeric(5, 4)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "input_snapshot": {
+          "name": "input_snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "model_version": {
+          "name": "model_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "prompt_version": {
+          "name": "prompt_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "playbook_version": {
+          "name": "playbook_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "policy_version": {
+          "name": "policy_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "experiments_tenant_status_updated_idx": {
+          "name": "experiments_tenant_status_updated_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "experiments_tenant_motion_created_idx": {
+          "name": "experiments_tenant_motion_created_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "motion",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "experiments_tenant_experiment_key_unique": {
+          "name": "experiments_tenant_experiment_key_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "experiment_key"
+          ]
+        },
+        "experiments_tenant_id_id_unique": {
+          "name": "experiments_tenant_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "experiments_status_check": {
+          "name": "experiments_status_check",
+          "value": "\"growthos\".\"experiments\".\"status\" IN ('draft', 'running', 'paused', 'concluded', 'abandoned', 'promoted', 'rolled_back')"
+        },
+        "experiments_winner_check": {
+          "name": "experiments_winner_check",
+          "value": "\"growthos\".\"experiments\".\"winner\" IS NULL OR \"growthos\".\"experiments\".\"winner\" IN ('a', 'b', 'inconclusive')"
+        },
+        "experiments_metric_direction_check": {
+          "name": "experiments_metric_direction_check",
+          "value": "\"growthos\".\"experiments\".\"metric_direction\" IN ('increase', 'decrease')"
+        },
+        "experiments_min_sample_size_check": {
+          "name": "experiments_min_sample_size_check",
+          "value": "\"growthos\".\"experiments\".\"min_sample_size\" > 0"
+        },
+        "experiments_confidence_check": {
+          "name": "experiments_confidence_check",
+          "value": "\"growthos\".\"experiments\".\"confidence\" IS NULL OR (\"growthos\".\"experiments\".\"confidence\" >= 0 AND \"growthos\".\"experiments\".\"confidence\" <= 1)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "growthos.incidents": {
+      "name": "incidents",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "incident_key": {
+          "name": "incident_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "component_id": {
+          "name": "component_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "severity": {
+          "name": "severity",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rollback_version_ref": {
+          "name": "rollback_version_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "diagnostic_metadata": {
+          "name": "diagnostic_metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "opened_at": {
+          "name": "opened_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "acknowledged_at": {
+          "name": "acknowledged_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "incidents_tenant_status_opened_idx": {
+          "name": "incidents_tenant_status_opened_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "opened_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "incidents_tenant_component_opened_idx": {
+          "name": "incidents_tenant_component_opened_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "component_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "opened_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "incidents_tenant_incident_key_unique": {
+          "name": "incidents_tenant_incident_key_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "incident_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "incidents_severity_check": {
+          "name": "incidents_severity_check",
+          "value": "\"growthos\".\"incidents\".\"severity\" IN ('low', 'medium', 'high', 'critical')"
+        },
+        "incidents_status_check": {
+          "name": "incidents_status_check",
+          "value": "\"growthos\".\"incidents\".\"status\" IN ('open', 'acknowledged', 'mitigated', 'resolved')"
+        },
+        "incidents_action_check": {
+          "name": "incidents_action_check",
+          "value": "\"growthos\".\"incidents\".\"action\" IS NULL OR \"growthos\".\"incidents\".\"action\" IN ('none', 'resume', 'retry_with_backoff', 'use_fallback', 'rollback', 'quarantine_and_escalate')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "growthos.learning_proposals": {
+      "name": "learning_proposals",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "proposal_key": {
+          "name": "proposal_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "experiment_id": {
+          "name": "experiment_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "target_type": {
+          "name": "target_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_id": {
+          "name": "target_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "risk": {
+          "name": "risk",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'awaiting_evidence'"
+        },
+        "proposal_payload": {
+          "name": "proposal_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evidence_snapshot": {
+          "name": "evidence_snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "evaluation_snapshot": {
+          "name": "evaluation_snapshot",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "decision": {
+          "name": "decision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decision_reasons": {
+          "name": "decision_reasons",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "base_version_ref": {
+          "name": "base_version_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "candidate_version_ref": {
+          "name": "candidate_version_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promoted_version_ref": {
+          "name": "promoted_version_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rollback_version_ref": {
+          "name": "rollback_version_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "human_approved_by": {
+          "name": "human_approved_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "human_approved_at": {
+          "name": "human_approved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evaluated_at": {
+          "name": "evaluated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promoted_at": {
+          "name": "promoted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rolled_back_at": {
+          "name": "rolled_back_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "learning_proposals_tenant_status_updated_idx": {
+          "name": "learning_proposals_tenant_status_updated_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "learning_proposals_tenant_experiment_idx": {
+          "name": "learning_proposals_tenant_experiment_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "experiment_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "learning_proposals_tenant_experiment_fk": {
+          "name": "learning_proposals_tenant_experiment_fk",
+          "tableFrom": "learning_proposals",
+          "tableTo": "experiments",
+          "schemaTo": "growthos",
+          "columnsFrom": [
+            "tenant_id",
+            "experiment_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "learning_proposals_tenant_proposal_key_unique": {
+          "name": "learning_proposals_tenant_proposal_key_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "proposal_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "learning_proposals_status_check": {
+          "name": "learning_proposals_status_check",
+          "value": "\"growthos\".\"learning_proposals\".\"status\" IN ('awaiting_evidence', 'evaluating', 'requires_approval', 'approved', 'rejected', 'promoted', 'rolled_back')"
+        },
+        "learning_proposals_risk_check": {
+          "name": "learning_proposals_risk_check",
+          "value": "\"growthos\".\"learning_proposals\".\"risk\" IN ('low', 'medium', 'high', 'critical')"
+        },
+        "learning_proposals_decision_check": {
+          "name": "learning_proposals_decision_check",
+          "value": "\"growthos\".\"learning_proposals\".\"decision\" IS NULL OR \"growthos\".\"learning_proposals\".\"decision\" IN ('continue_experiment', 'reject', 'requires_approval', 'promote')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "growthos.motion_scores": {
+      "name": "motion_scores",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scored_at": {
+          "name": "scored_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "scorer_version": {
+          "name": "scorer_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scores": {
+          "name": "scores",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "inputs_digest": {
+          "name": "inputs_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rationale": {
+          "name": "rationale",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "motion_scores_tenant_scored_at_idx": {
+          "name": "motion_scores_tenant_scored_at_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "scored_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "growthos.motion_stack": {
+      "name": "motion_stack",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "primary_motions": {
+          "name": "primary_motions",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "secondary_motions": {
+          "name": "secondary_motions",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observe_only": {
+          "name": "observe_only",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "deactivated": {
+          "name": "deactivated",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "source_score_id": {
+          "name": "source_score_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "approved_by": {
+          "name": "approved_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "approved_at": {
+          "name": "approved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "version": {
+          "name": "version",
+          "type": "numeric",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'1'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "motion_stack_tenant_version_idx": {
+          "name": "motion_stack_tenant_version_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "version",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "motion_stack_source_score_id_motion_scores_id_fk": {
+          "name": "motion_stack_source_score_id_motion_scores_id_fk",
+          "tableFrom": "motion_stack",
+          "tableTo": "motion_scores",
+          "schemaTo": "growthos",
+          "columnsFrom": [
+            "source_score_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "motion_stack_tenant_version_unique": {
+          "name": "motion_stack_tenant_version_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "version"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "growthos.playbook_versions": {
+      "name": "playbook_versions",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "playbook_type": {
+          "name": "playbook_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "numeric(10, 0)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "content": {
+          "name": "content",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "effective_at": {
+          "name": "effective_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "retired_at": {
+          "name": "retired_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "playbook_versions_tenant_type_retired_idx": {
+          "name": "playbook_versions_tenant_type_retired_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "playbook_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "retired_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "playbook_versions_tenant_type_version_unique": {
+          "name": "playbook_versions_tenant_type_version_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "playbook_type",
+            "version"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "playbook_versions_type_check": {
+          "name": "playbook_versions_type_check",
+          "value": "\"growthos\".\"playbook_versions\".\"playbook_type\" IN ('content_brief', 'intel_brief', 'blog_draft', 'custom')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "growthos.signal_events": {
+      "name": "signal_events",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigserial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "signal_type": {
+          "name": "signal_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_id": {
+          "name": "external_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "processed_at": {
+          "name": "processed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "signal_events_tenant_type_created_idx": {
+          "name": "signal_events_tenant_type_created_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "signal_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "signal_events_tenant_unprocessed_idx": {
+          "name": "signal_events_tenant_unprocessed_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"growthos\".\"signal_events\".\"processed_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "signal_events_tenant_source_external_uniq": {
+          "name": "signal_events_tenant_source_external_uniq",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "external_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"growthos\".\"signal_events\".\"external_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "signal_events_type_check": {
+          "name": "signal_events_type_check",
+          "value": "\"growthos\".\"signal_events\".\"signal_type\" IN ('competitive', 'community', 'icp', 'product', 'market', 'internal')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "growthos.tenant_settings": {
+      "name": "tenant_settings",
+      "schema": "growthos",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "settings": {
+          "name": "settings",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "growthos.workflow_runs": {
+      "name": "workflow_runs",
+      "schema": "growthos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workflow_id": {
+          "name": "workflow_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dedupe_key": {
+          "name": "dedupe_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'requested'"
+        },
+        "failure_code": {
+          "name": "failure_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "workflow_runs_tenant_state_updated_idx": {
+          "name": "workflow_runs_tenant_state_updated_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "workflow_runs_tenant_workflow_unique": {
+          "name": "workflow_runs_tenant_workflow_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "workflow_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "workflow_runs_state_check": {
+          "name": "workflow_runs_state_check",
+          "value": "\"growthos\".\"workflow_runs\".\"state\" IN ('requested', 'in_progress', 'completed', 'failed')"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

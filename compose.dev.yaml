@@ -6,18 +6,19 @@
 #   cp .env.example .env          # edit OPENAI_API_KEY if you want LLM features
 #   docker compose -f compose.dev.yaml up --build
 #
-# First run only (runs automatically via the `migrate` service):
-#   The Drizzle migrations + dev seed execute before the API starts.
+# Runs automatically via the `migrate` service:
+#   Pending Drizzle migrations + dev seed execute before the API starts.
 #
 # Ports exposed to localhost:
-#   API   → http://localhost:3001
-#   Web   → http://localhost:3000
-#   Postgres → localhost:5432
+#   API   → http://localhost:3091
+#   Web   → http://localhost:3080
+#   Postgres → localhost:5442
 #   NATS     → localhost:4222 / monitoring 8222
 #   ClickHouse → localhost:8123 (HTTP)
 #   MinIO console → http://localhost:9001
 #   OpenBao (Vault-compat) → http://localhost:8200
 #   Gitea  → http://localhost:3088
+#   n8n    → http://localhost:5678 when started with --profile local-n8n
 #
 # Packages are installed from the host pnpm-lock.yaml and the host
 # node_modules are NOT mounted — the container has its own pnpm store
@@ -39,7 +40,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: growthos_ci
     ports:
-      - "5432:5432"
+      - "5442:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d growthos_ci"]
       interval: 3s
@@ -94,7 +95,7 @@ services:
     ports:
       - "8123:8123"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- 'http://localhost:8123/ping' | grep -q Ok"]
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:8123/ping' | grep -q Ok"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -106,6 +107,7 @@ services:
     volumes:
       - growthos-dev-clickhouse:/var/lib/clickhouse
       - ./packages/db/clickhouse:/docker-entrypoint-initdb.d:ro
+      - ./docker/clickhouse-experimental.xml:/etc/clickhouse-server/users.d/experimental.xml:ro
 
   minio:
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z
@@ -180,6 +182,27 @@ services:
       - growthos-dev-gitea:/var/lib/gitea
       - growthos-dev-gitea-config:/etc/gitea
 
+  n8n:
+    image: n8nio/n8n:1
+    profiles:
+      - local-n8n
+    environment:
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-America/Los_Angeles}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-growthos-dev-n8n-encryption-key-change-me}
+      N8N_HOST: localhost
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_SECURE_COOKIE: "false"
+      WEBHOOK_URL: http://localhost:5678/
+    ports:
+      - "5678:5678"
+    volumes:
+      - growthos-dev-n8n:/home/node/.n8n
+    restart: unless-stopped
+
   # ── Database migration + seed (runs once before API starts) ──────────────────
 
   migrate:
@@ -201,11 +224,11 @@ services:
       - |
         set -e
         export PNPM_HOME=/pnpm
-        export PATH="$PNPM_HOME:$PATH"
+        export PATH="$$PNPM_HOME:$$PATH"
         corepack enable && corepack prepare pnpm@10.17.0 --activate
         pnpm install --frozen-lockfile --prefer-offline 2>/dev/null || pnpm install --frozen-lockfile
         echo "▶ Running migrations..."
-        pnpm migrate:dry-run
+        pnpm --filter @growthos/db migrate:local
         echo "▶ Seeding dev tenant..."
         pnpm seed:dev
         echo "✓ Database ready."
@@ -222,11 +245,17 @@ services:
       NATS_SERVERS: nats://nats:4222
       CLICKHOUSE_URL: http://clickhouse:8123
       MINIO_ENDPOINT: http://minio:9000
+      N8N_DISPATCH_WEBHOOK_URL: ${N8N_DISPATCH_WEBHOOK_URL:-http://host.docker.internal:5678/webhook/growthos/dispatch}
+      # n8n in the `local-n8n` profile reaches the API over the Compose network.
+      # Override this with a public/host URL when n8n runs outside Compose.
+      N8N_DISPATCH_RESULT_CALLBACK_URL: ${N8N_DISPATCH_RESULT_CALLBACK_URL:-http://api:3001/v1/n8n/dispatch-results}
+      N8N_SHARED_SECRET: ${N8N_SHARED_SECRET:-growthos-dev-n8n-shared-secret}
+      N8N_TIMEOUT_MS: ${N8N_TIMEOUT_MS:-10000}
       VAULT_ADDR: http://openbao:8200
       NODE_ENV: development
       PORT: "3001"
     ports:
-      - "3001:3001"
+      - "3091:3001"
     volumes:
       - ./apps/api/src:/app/apps/api/src:ro
       - ./packages:/app/packages:ro
@@ -250,18 +279,278 @@ services:
     <<: *env
     environment:
       GROWTHOS_API_BASE_URL: http://api:3001
-      NEXT_PUBLIC_GROWTHOS_API_BASE_URL: http://localhost:3001
+      NEXT_PUBLIC_GROWTHOS_API_BASE_URL: http://localhost:3091
       NODE_ENV: development
       PORT: "3000"
       HOSTNAME: 0.0.0.0
     ports:
-      - "3000:3000"
+      - "3080:3000"
     volumes:
       - ./apps/web/src:/app/apps/web/src:ro
       - ./apps/web/public:/app/apps/web/public:ro
     depends_on:
       api:
         condition: service_healthy
+    restart: unless-stopped
+
+  outbox-publisher:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      N8N_DISPATCH_WEBHOOK_URL: ${N8N_DISPATCH_WEBHOOK_URL:-http://host.docker.internal:5678/webhook/growthos/dispatch}
+      # n8n in the `local-n8n` profile reaches the API over the Compose network.
+      # Override this with a public/host URL when n8n runs outside Compose.
+      N8N_DISPATCH_RESULT_CALLBACK_URL: ${N8N_DISPATCH_RESULT_CALLBACK_URL:-http://api:3001/v1/n8n/dispatch-results}
+      N8N_DISPATCH_LEASE_MS: ${N8N_DISPATCH_LEASE_MS:-120000}
+      N8N_SHARED_SECRET: ${N8N_SHARED_SECRET:-growthos-dev-n8n-shared-secret}
+      N8N_TIMEOUT_MS: ${N8N_TIMEOUT_MS:-10000}
+      OUTBOX_BATCH_SIZE_PER_TENANT: ${OUTBOX_BATCH_SIZE_PER_TENANT:-100}
+      OUTBOX_ENABLE_LISTEN_NOTIFY: ${OUTBOX_ENABLE_LISTEN_NOTIFY:-true}
+      OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-1000}
+      OUTBOX_TENANT_IDS: ${OUTBOX_TENANT_IDS:-00000000-0000-0000-0001-000000000001}
+      WORKER_BOOTSTRAP: "true"
+    command:
+      [
+        "pnpm",
+        "--filter",
+        "@growthos/worker-outbox-publisher",
+        "dev",
+      ]
+    volumes:
+      - ./apps/worker-outbox-publisher/src:/app/apps/worker-outbox-publisher/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Durable GTM motion workers ──────────────────────────────────────────────
+  # Signals are persisted first, routed by the inbox worker, then forwarded
+  # through JetStream only by the transactional outbox publisher. Each
+  # downstream worker has a durable consumer and can safely restart/replay.
+
+  workflow-callback:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      # Local Compose provisions through idempotent stubs. Production sets this
+      # false and supplies RESTATE_BASE_URL, or explicitly configures real clients.
+      ENABLE_DIRECT_PROVISIONING: ${ENABLE_DIRECT_PROVISIONING:-true}
+      WORKFLOW_CALLBACK_REQUEST_SUBJECT: ${WORKFLOW_CALLBACK_REQUEST_SUBJECT:-t.*.workflow.tenant_provisioning.requested.v1}
+      WORKFLOW_CALLBACK_REQUEST_DURABLE_NAME: ${WORKFLOW_CALLBACK_REQUEST_DURABLE_NAME:-growthos_workflow_callback}
+      WORKFLOW_CALLBACK_REQUEST_QUEUE_GROUP: ${WORKFLOW_CALLBACK_REQUEST_QUEUE_GROUP:-growthos-worker-workflow-callback}
+      WORKFLOW_CALLBACK_REQUEST_ACK_WAIT_MS: ${WORKFLOW_CALLBACK_REQUEST_ACK_WAIT_MS:-60000}
+      WORKFLOW_CALLBACK_REQUEST_MAX_DELIVER: ${WORKFLOW_CALLBACK_REQUEST_MAX_DELIVER:-5}
+      WORKFLOW_CALLBACK_REQUEST_RETRY_DELAY_MS: ${WORKFLOW_CALLBACK_REQUEST_RETRY_DELAY_MS:-5000}
+      WORKFLOW_CALLBACK_REQUEST_MAX_ACK_PENDING: ${WORKFLOW_CALLBACK_REQUEST_MAX_ACK_PENDING:-25}
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-workflow-callback", "dev"]
+    volumes:
+      - ./apps/worker-workflow-callback/src:/app/apps/worker-workflow-callback/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  signal-router:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      SIGNAL_ROUTER_TENANT_IDS: ${SIGNAL_ROUTER_TENANT_IDS:-00000000-0000-0000-0001-000000000001}
+      SIGNAL_ROUTER_BATCH_SIZE_PER_SIGNAL_TYPE: ${SIGNAL_ROUTER_BATCH_SIZE_PER_SIGNAL_TYPE:-50}
+      SIGNAL_ROUTER_POLL_INTERVAL_MS: ${SIGNAL_ROUTER_POLL_INTERVAL_MS:-1000}
+      SIGNAL_ROUTER_CLAIM_LEASE_MS: ${SIGNAL_ROUTER_CLAIM_LEASE_MS:-60000}
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-signal-router", "dev"]
+    volumes:
+      - ./apps/worker-signal-router/src:/app/apps/worker-signal-router/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  intel-director:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-intel-director", "dev"]
+    volumes:
+      - ./apps/worker-intel-director/src:/app/apps/worker-intel-director/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  content-strategist:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command:
+      ["pnpm", "--filter", "@growthos/worker-content-strategist", "dev"]
+    volumes:
+      - ./apps/worker-content-strategist/src:/app/apps/worker-content-strategist/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  blog-draft:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-blog-draft", "dev"]
+    volumes:
+      - ./apps/worker-blog-draft/src:/app/apps/worker-blog-draft/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  critique:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-critique", "dev"]
+    volumes:
+      - ./apps/worker-critique/src:/app/apps/worker-critique/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  learning:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-learning", "dev"]
+    volumes:
+      - ./apps/worker-learning/src:/app/apps/worker-learning/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  attribution:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-attribution", "dev"]
+    volumes:
+      - ./apps/worker-attribution/src:/app/apps/worker-attribution/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  warmth:
+    build:
+      context: .
+      dockerfile: docker/worker.dev.Dockerfile
+    <<: *env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/growthos_ci
+      NATS_SERVERS: nats://nats:4222
+      GROWTHOS_JETSTREAM_STREAM: GROWTHOS
+      WORKER_BOOTSTRAP: "true"
+    command: ["pnpm", "--filter", "@growthos/worker-warmth", "dev"]
+    volumes:
+      - ./apps/worker-warmth/src:/app/apps/worker-warmth/src:ro
+      - ./packages:/app/packages:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+      jetstream-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
@@ -271,4 +560,5 @@ volumes:
   growthos-dev-minio:
   growthos-dev-gitea:
   growthos-dev-gitea-config:
+  growthos-dev-n8n:
   migrate-pnpm-store:

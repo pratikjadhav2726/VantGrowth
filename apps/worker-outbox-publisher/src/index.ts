@@ -1,4 +1,11 @@
-import { PostgresOutboxRepository, createDbFromEnv } from "@growthos/db";
+import {
+  PostgresComponentHealthRepository,
+  PostgresExternalActionsRepository,
+  PostgresIncidentRepository,
+  PostgresOutboxRepository,
+  createDbFromEnv,
+} from "@growthos/db";
+import { N8nDispatchClient } from "@growthos/n8n";
 import { createLogger, initOtelSdk } from "@growthos/observability";
 import {
   PostgresCycleLeaseGuard,
@@ -11,18 +18,67 @@ import { OutboxPublisherRunner } from "./runner.js";
 
 const log = createLogger("growthos.worker-outbox-publisher");
 
+const resolveN8nDispatchClient = (): N8nDispatchClient | null => {
+  const webhookUrl = process.env.N8N_DISPATCH_WEBHOOK_URL;
+  if (!webhookUrl) return null;
+
+  const configuredTimeoutMs = process.env.N8N_TIMEOUT_MS
+    ? Number(process.env.N8N_TIMEOUT_MS)
+    : 10_000;
+
+  return new N8nDispatchClient({
+    webhookUrl,
+    timeoutMs:
+      Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+        ? configuredTimeoutMs
+        : 10_000,
+    ...(process.env.N8N_SHARED_SECRET
+      ? { sharedSecret: process.env.N8N_SHARED_SECRET }
+      : {}),
+  });
+};
+
 export const createOutboxPublisherFromEnv = async (): Promise<{
   publisher: OutboxPublisher;
   runtimeConfig: ReturnType<typeof runtimeConfigFromEnv>;
   close: () => Promise<void>;
 }> => {
-  const outboxRepository = new PostgresOutboxRepository(createDbFromEnv(), {
+  const db = createDbFromEnv();
+  const outboxRepository = new PostgresOutboxRepository(db, {
+    actorKind: "system",
+  });
+  const externalActionsRepository = new PostgresExternalActionsRepository(db, {
+    actorKind: "system",
+  });
+  const incidentRepository = new PostgresIncidentRepository(db, {
+    actorKind: "system",
+  });
+  const componentHealthRepository = new PostgresComponentHealthRepository(db, {
     actorKind: "system",
   });
   const eventPublisher = await NatsJetStreamPublisher.connect();
+  const n8nDispatchClient = resolveN8nDispatchClient();
+  const n8nDispatchResultCallbackUrl =
+    process.env.N8N_DISPATCH_RESULT_CALLBACK_URL ?? null;
+  if (n8nDispatchClient && !n8nDispatchResultCallbackUrl) {
+    await eventPublisher.close();
+    throw new Error(
+      "N8N_DISPATCH_RESULT_CALLBACK_URL is required when N8N_DISPATCH_WEBHOOK_URL is configured",
+    );
+  }
   const publisher = new OutboxPublisher({
     outboxRepository,
     eventPublisher,
+    n8nDispatchClient,
+    externalActionsRepository,
+    incidentRepository,
+    componentHealthRepository,
+    n8nDispatchLeaseMs: Number(process.env.N8N_DISPATCH_LEASE_MS ?? "120000"),
+    ...(process.env.N8N_DISPATCH_WORKER_ID
+      ? { n8nDispatchWorkerId: process.env.N8N_DISPATCH_WORKER_ID }
+      : {}),
+    n8nDispatchResultCallbackUrl,
+    n8nRequireResultCallback: true,
   });
   const runtimeConfig = runtimeConfigFromEnv();
 

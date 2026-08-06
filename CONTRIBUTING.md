@@ -32,7 +32,7 @@ docker compose -f compose.dev.yaml up --build -d
 ## Branch and PR workflow
 
 1. Fork the repository.
-2. Create a feature branch from `main`.
+2. Create a feature branch from `dev`.
 3. Keep changes focused and small.
 4. Add or update tests when behavior changes.
 5. Open a PR with:

@@ -50,7 +50,7 @@ describe("classifySignal", () => {
 // ---------------------------------------------------------------------------
 
 describe("SignalRouter (no LLM)", () => {
-  it("emits routed signal to outbox and tenant-scoped NATS subject", async () => {
+  it("emits routed signal to the durable outbox", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
     const eventPublisher: EventPublisher = {
       publish: vi.fn(async () => undefined),
@@ -60,13 +60,7 @@ describe("SignalRouter (no LLM)", () => {
     const routed = await router.route(baseSignal);
 
     expect(routed.priority).toBe("P1");
-    expect(eventPublisher.publish).toHaveBeenCalledWith(
-      `t.${tenantId}.signal.routed.v1`,
-      expect.objectContaining({
-        signal_id: "sig-1",
-        target_agent: "intel_director",
-      }),
-    );
+    expect(eventPublisher.publish).not.toHaveBeenCalled();
 
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
     expect(events).toHaveLength(1);
@@ -192,8 +186,9 @@ describe("SignalRouter (with LLM grading)", () => {
     expect(routed.grade?.relevance).toBe(0.9);
     expect(routed.grade?.urgency).toBe("high");
 
-    const publishedPayload = published[0]?.payload;
-    expect(publishedPayload?.grade).toMatchObject({
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    const routedEvent = events[0];
+    expect(routedEvent?.payload.grade).toMatchObject({
       relevance: 0.9,
       topic_category: "competitor_pricing",
     });

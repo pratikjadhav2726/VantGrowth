@@ -1,4 +1,6 @@
+import { HttpLagoBillingClient, StubBillingClient } from "@growthos/billing";
 import {
+  type DurableConsumerHandle,
   HttpGiteaProvisioningClient,
   HttpMinioProvisioningClient,
   RestateHttpWorkflowClient,
@@ -7,22 +9,24 @@ import {
   StubNatsProvisioningClient,
   StubPaperclipProvisioningClient,
   restateConfigFromEnv,
+  startDurableJetStreamConsumer,
 } from "@growthos/core";
-import { HttpZitadelClient, StubZitadelClient } from "@growthos/identity";
-import { HttpLagoBillingClient, StubBillingClient } from "@growthos/billing";
 import {
   PostgresOutboxRepository,
   PostgresWorkflowRunRepository,
   createDbFromEnv,
 } from "@growthos/db";
+import { HttpZitadelClient, StubZitadelClient } from "@growthos/identity";
 import { createLogger, initOtelSdk } from "@growthos/observability";
 import {
   EnvSecretManager,
   TenantSecretsService,
   VaultSecretManager,
 } from "@growthos/secrets";
-import { JSONCodec, connect } from "nats";
-import { NatsJetStreamPublisher } from "./nats-publisher.js";
+import {
+  enqueueWorkflowCallbackDeadLetter,
+  parseTenantProvisioningRequestedEvent,
+} from "./tenant-provisioning-request.js";
 import type { ProvisioningClients } from "./workflow-callback-worker.js";
 import { WorkflowCallbackWorker } from "./workflow-callback-worker.js";
 
@@ -97,8 +101,18 @@ const resolveSecretsService = (): TenantSecretsService => {
   return new TenantSecretsService(new EnvSecretManager());
 };
 
-export const createWorkflowCallbackWorkerFromEnv =
-  async (): Promise<WorkflowCallbackWorker> => {
+export interface WorkflowCallbackRuntime {
+  worker: WorkflowCallbackWorker;
+  outboxRepository: PostgresOutboxRepository;
+}
+
+/**
+ * Builds the worker and the durable outbox used for both lifecycle updates and
+ * exhausted-message dead letters. No direct event publisher is created here:
+ * the transactional outbox publisher is the only JetStream producer.
+ */
+export const createWorkflowCallbackRuntimeFromEnv =
+  async (): Promise<WorkflowCallbackRuntime> => {
     const db = createDbFromEnv();
     const outboxRepository = new PostgresOutboxRepository(db, {
       actorKind: "system",
@@ -106,7 +120,6 @@ export const createWorkflowCallbackWorkerFromEnv =
     const workflowRunRepository = new PostgresWorkflowRunRepository(db, {
       actorKind: "system",
     });
-    const eventPublisher = await NatsJetStreamPublisher.connect();
     const provisioningClients = resolveProvisioningClients();
     const tenantSecretsService = resolveSecretsService();
 
@@ -131,60 +144,113 @@ export const createWorkflowCallbackWorkerFromEnv =
       } as unknown as InstanceType<typeof RestateHttpWorkflowClient>;
     }
 
-    return new WorkflowCallbackWorker({
+    return {
       outboxRepository,
-      workflowRunRepository,
-      eventPublisher,
-      runtimeStateVerifier,
-      tenantSecretsService,
-      ...(provisioningClients ? { provisioningClients } : {}),
-    });
+      worker: new WorkflowCallbackWorker({
+        outboxRepository,
+        workflowRunRepository,
+        runtimeStateVerifier,
+        tenantSecretsService,
+        ...(provisioningClients ? { provisioningClients } : {}),
+      }),
+    };
   };
 
-const startTenantProvisioningRequestedConsumer = async (
+export const createWorkflowCallbackWorkerFromEnv =
+  async (): Promise<WorkflowCallbackWorker> =>
+    (await createWorkflowCallbackRuntimeFromEnv()).worker;
+
+export const startTenantProvisioningRequestedConsumer = async (
   worker: WorkflowCallbackWorker,
-): Promise<void> => {
-  const connection = await connect({
-    servers: process.env.NATS_SERVERS ?? "nats://localhost:4222",
-    name:
-      process.env.NATS_CLIENT_NAME ??
-      "growthos-worker-workflow-callback-consumer",
-  });
-  const codec = JSONCodec<Record<string, unknown>>();
+  outboxRepository: PostgresOutboxRepository,
+): Promise<DurableConsumerHandle> => {
   const subject =
     process.env.WORKFLOW_CALLBACK_REQUEST_SUBJECT ??
     "t.*.workflow.tenant_provisioning.requested.v1";
-  const queueGroup =
-    process.env.WORKFLOW_CALLBACK_QUEUE_GROUP ??
-    "growthos-worker-workflow-callback";
 
-  const subscription = connection.subscribe(subject, { queue: queueGroup });
-  void (async () => {
-    for await (const message of subscription) {
-      try {
-        await worker.processTenantProvisioningCompletion(
-          codec.decode(message.data),
+  return startDurableJetStreamConsumer(
+    {
+      servers: process.env.NATS_SERVERS ?? "nats://localhost:4222",
+      streamName: process.env.GROWTHOS_JETSTREAM_STREAM ?? "GROWTHOS",
+      subject,
+      durableName:
+        process.env.WORKFLOW_CALLBACK_REQUEST_DURABLE_NAME ??
+        "growthos_workflow_callback",
+      queueGroup:
+        process.env.WORKFLOW_CALLBACK_REQUEST_QUEUE_GROUP ??
+        "growthos-worker-workflow-callback",
+      clientName:
+        process.env.NATS_CLIENT_NAME ?? "growthos-worker-workflow-callback",
+      ackWaitMs: Number(
+        process.env.WORKFLOW_CALLBACK_REQUEST_ACK_WAIT_MS ?? "60000",
+      ),
+      maxDeliver: Number(
+        process.env.WORKFLOW_CALLBACK_REQUEST_MAX_DELIVER ?? "5",
+      ),
+      retryDelayMs: Number(
+        process.env.WORKFLOW_CALLBACK_REQUEST_RETRY_DELAY_MS ?? "5000",
+      ),
+      maxAckPending: Number(
+        process.env.WORKFLOW_CALLBACK_REQUEST_MAX_ACK_PENDING ?? "25",
+      ),
+    },
+    async (payload, context) => {
+      await worker.processTenantProvisioningCompletion(
+        parseTenantProvisioningRequestedEvent(payload, context.subject),
+      );
+    },
+    {
+      onError: (error, context) => {
+        log.error(
+          {
+            err: error,
+            subject: context.subject,
+            sequence: context.streamSequence,
+            redelivery_count: context.redeliveryCount,
+          },
+          "tenant provisioning callback processing failed; JetStream will retry",
         );
-      } catch (error) {
-        log.error({ err: error }, "workflow callback processing failed");
-      }
-    }
-  })();
+      },
+      onExhausted: async (payload, context, error) =>
+        enqueueWorkflowCallbackDeadLetter(
+          outboxRepository,
+          payload,
+          context,
+          error,
+        ),
+    },
+  );
 };
 
 if (process.env.WORKER_BOOTSTRAP === "true") {
   initOtelSdk({ serviceName: "growthos.worker-workflow-callback" });
-  const worker = await createWorkflowCallbackWorkerFromEnv();
-  await startTenantProvisioningRequestedConsumer(worker);
+  const { worker, outboxRepository } =
+    await createWorkflowCallbackRuntimeFromEnv();
+  const consumer = await startTenantProvisioningRequestedConsumer(
+    worker,
+    outboxRepository,
+  );
   log.info(
     {
       subject:
         process.env.WORKFLOW_CALLBACK_REQUEST_SUBJECT ??
         "t.*.workflow.tenant_provisioning.requested.v1",
+      durable_name:
+        process.env.WORKFLOW_CALLBACK_REQUEST_DURABLE_NAME ??
+        "growthos_workflow_callback",
     },
     "@growthos/worker-workflow-callback initialized",
   );
+
+  const shutdown = (signal: string) => {
+    void consumer.close().finally(() => {
+      log.info({ signal }, "workflow callback consumer stopped");
+    });
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 export * from "./nats-publisher.js";
+export * from "./tenant-provisioning-request.js";
 export * from "./workflow-callback-worker.js";

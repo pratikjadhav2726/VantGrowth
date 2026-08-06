@@ -77,7 +77,6 @@ export function BrandStepForm({ defaults, submitAction }: BrandStepFormProps) {
         <p
           id="positioning-error"
           className="mt-1 text-xs text-red-600"
-          role="status"
           aria-live="polite"
         >
           {positioningError ?? ""}
@@ -102,7 +101,6 @@ export function BrandStepForm({ defaults, submitAction }: BrandStepFormProps) {
             <p
               id="proof1-error"
               className="mt-1 text-xs text-red-600"
-              role="status"
               aria-live="polite"
             >
               {proof1Error ?? ""}
@@ -121,7 +119,6 @@ export function BrandStepForm({ defaults, submitAction }: BrandStepFormProps) {
             <p
               id="proof2-error"
               className="mt-1 text-xs text-red-600"
-              role="status"
               aria-live="polite"
             >
               {proof2Error ?? ""}
@@ -140,7 +137,6 @@ export function BrandStepForm({ defaults, submitAction }: BrandStepFormProps) {
             <p
               id="proof3-error"
               className="mt-1 text-xs text-red-600"
-              role="status"
               aria-live="polite"
             >
               {proof3Error ?? ""}
@@ -198,7 +194,6 @@ export function BrandStepForm({ defaults, submitAction }: BrandStepFormProps) {
         <p
           id="words-to-avoid-error"
           className="mt-1 text-xs text-red-600"
-          role="status"
           aria-live="polite"
         >
           {wordsToAvoidError ?? ""}

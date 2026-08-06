@@ -1,4 +1,5 @@
 import {
+  InMemoryLearningProposalRepository,
   InMemoryOutboxRepository,
   InMemoryPlaybookVersionsRepository,
 } from "@growthos/db";
@@ -6,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type EventPublisher,
   LearningWorker,
+  type PromotionEvidenceProvider,
   buildUpdatedRubricContent,
   synthesizeLearningCandidate,
 } from "./learning-worker.js";
@@ -21,6 +23,8 @@ const makeCritiquePayload = (
     verdict: "approve" | "revise" | "reject";
     reasons: string[];
     confidence_score: number;
+    experiment_id: string;
+    change_risk: "low" | "medium" | "high" | "critical";
   }> = {},
 ) => ({
   critique_id:
@@ -28,6 +32,10 @@ const makeCritiquePayload = (
   source: "worker-critique",
   artifact_kind: overrides.artifact_kind ?? "blog_draft.v1",
   artifact_id: overrides.artifact_id ?? "art-00000001",
+  ...(overrides.experiment_id
+    ? { experiment_id: overrides.experiment_id }
+    : {}),
+  ...(overrides.change_risk ? { change_risk: overrides.change_risk } : {}),
   prompt_version: "1.0.0",
   verdict: overrides.verdict ?? "revise",
   confidence_score: overrides.confidence_score ?? 0.68,
@@ -154,7 +162,7 @@ describe("buildUpdatedRubricContent", () => {
 // ---------------------------------------------------------------------------
 
 describe("LearningWorker.process", () => {
-  it("emits synthesized learning candidate event into outbox and tenant subject", async () => {
+  it("emits synthesized learning candidate event into the outbox only", async () => {
     const outboxRepository = new InMemoryOutboxRepository();
     const eventPublisher: EventPublisher = {
       publish: vi.fn(async () => undefined),
@@ -175,13 +183,7 @@ describe("LearningWorker.process", () => {
     });
 
     expect(result.disposition).toBe("candidate");
-    expect(eventPublisher.publish).toHaveBeenCalledWith(
-      `t.${tenantId}.learning.candidate.synthesized.v1`,
-      expect.objectContaining({
-        learning_id: "learn-1",
-        disposition: "candidate",
-      }),
-    );
+    expect(eventPublisher.publish).not.toHaveBeenCalled();
 
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
     expect(events).toHaveLength(1);
@@ -223,15 +225,33 @@ describe("LearningWorker.process", () => {
 describe("LearningWorker.processFromCritique", () => {
   const makeWorker = (
     playbookRepository?: InMemoryPlaybookVersionsRepository,
+    promotionEnabled = true,
   ) => {
     const outboxRepository = new InMemoryOutboxRepository();
     const eventPublisher: EventPublisher = {
       publish: vi.fn(async () => undefined),
     };
+    const promotionEvidenceProvider: PromotionEvidenceProvider = {
+      getEvaluation: async (proposal) => ({
+        proposalId: proposal.proposalId,
+        risk: "low" as const,
+        evidenceCount: 30,
+        uniqueEntities: 20,
+        confidence: 0.95,
+        metricDirection: "increase" as const,
+        baselineMetric: 0.1,
+        candidateMetric: 0.12,
+        worstGuardrailRegression: 0,
+        humanApproved: false,
+      }),
+    };
     const worker = new LearningWorker({
       outboxRepository,
       eventPublisher,
       ...(playbookRepository ? { playbookRepository } : {}),
+      ...(playbookRepository && promotionEnabled
+        ? { promotionEvidenceProvider }
+        : {}),
     });
     return { worker, outboxRepository, eventPublisher };
   };
@@ -243,6 +263,320 @@ describe("LearningWorker.processFromCritique", () => {
       makeCritiquePayload(),
     );
     expect(result).toBeNull();
+  });
+
+  it("records a proposal but does not mutate a playbook without promotion evidence", async () => {
+    const playbookRepo = new InMemoryPlaybookVersionsRepository();
+    const { worker, outboxRepository } = makeWorker(playbookRepo, false);
+
+    const result = await worker.processFromCritique(
+      tenantId,
+      makeCritiquePayload({ verdict: "revise" }),
+    );
+
+    expect(result).toBeNull();
+    expect(await playbookRepo.getActive(tenantId, "blog_draft")).toBeNull();
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.eventType).toBe("learning.playbook.change.proposed.v1");
+  });
+
+  it("persists every corrective proposal as awaiting evidence before it can mutate a playbook", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const proposalRepository = new InMemoryLearningProposalRepository();
+    const worker = new LearningWorker({
+      outboxRepository,
+      playbookRepository: new InMemoryPlaybookVersionsRepository(),
+      learningProposalRepository: proposalRepository,
+    });
+
+    await worker.processFromCritique(
+      tenantId,
+      makeCritiquePayload({
+        critique_id: "crit-persisted-awaiting-evidence",
+        verdict: "revise",
+      }),
+    );
+
+    const proposal = await proposalRepository.getByProposalKey(
+      tenantId,
+      "critique:crit-persisted-awaiting-evidence",
+    );
+    expect(proposal).toMatchObject({
+      targetType: "blog_draft",
+      targetId: "art-00000001",
+      risk: "high",
+      status: "awaiting_evidence",
+      experimentId: null,
+    });
+
+    const events = await outboxRepository.listUnconsumed(tenantId, 10);
+    expect(events[0]?.payload).toMatchObject({
+      proposal_id: "critique:crit-persisted-awaiting-evidence",
+      learning_proposal_id: proposal?.id,
+      change_risk: "high",
+    });
+  });
+
+  it("records an evidence pass for a high-risk change as requiring founder approval", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const proposalRepository = new InMemoryLearningProposalRepository();
+    const worker = new LearningWorker({
+      outboxRepository,
+      playbookRepository: new InMemoryPlaybookVersionsRepository(),
+      learningProposalRepository: proposalRepository,
+      promotionEvidenceProvider: {
+        getEvaluation: async (proposal) => ({
+          proposalId: proposal.proposalId,
+          risk: "high",
+          evidenceCount: 30,
+          uniqueEntities: 20,
+          confidence: 0.95,
+          metricDirection: "increase",
+          baselineMetric: 0.1,
+          candidateMetric: 0.12,
+          worstGuardrailRegression: 0,
+          humanApproved: false,
+        }),
+      },
+    });
+
+    const result = await worker.processFromCritique(
+      tenantId,
+      makeCritiquePayload({
+        critique_id: "crit-requires-founder",
+        verdict: "revise",
+        change_risk: "high",
+      }),
+    );
+
+    expect(result).toBeNull();
+    const proposal = await proposalRepository.getByProposalKey(
+      tenantId,
+      "critique:crit-requires-founder",
+    );
+    expect(proposal).toMatchObject({
+      status: "requires_approval",
+      decision: "requires_approval",
+      humanApprovedAt: null,
+    });
+  });
+
+  it("re-reads evidence after founder approval before promoting a high-risk proposal", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const proposalRepository = new InMemoryLearningProposalRepository();
+    const playbookRepository = new InMemoryPlaybookVersionsRepository();
+    let humanApproved = false;
+    const worker = new LearningWorker({
+      outboxRepository,
+      playbookRepository,
+      learningProposalRepository: proposalRepository,
+      promotionEvidenceProvider: {
+        getEvaluation: async (proposal) => ({
+          proposalId: proposal.proposalId,
+          risk: "high",
+          evidenceCount: 30,
+          uniqueEntities: 20,
+          confidence: 0.95,
+          metricDirection: "increase",
+          baselineMetric: 0.1,
+          candidateMetric: 0.12,
+          worstGuardrailRegression: 0,
+          humanApproved,
+        }),
+      },
+    });
+
+    await worker.processFromCritique(
+      tenantId,
+      makeCritiquePayload({
+        critique_id: "crit-founder-recheck",
+        verdict: "revise",
+        change_risk: "high",
+      }),
+    );
+    const pending = await proposalRepository.getByProposalKey(
+      tenantId,
+      "critique:crit-founder-recheck",
+    );
+    expect(pending?.status).toBe("requires_approval");
+
+    const approved = await proposalRepository.approve(
+      tenantId,
+      pending?.id ?? "",
+      "founder@example.test",
+    );
+    expect(approved?.status).toBe("approved");
+    humanApproved = true;
+
+    // Duplicate outbox deliveries may both re-read the approved proposal.
+    // The proposal lease lets exactly one of them create the immutable version.
+    const [version, duplicate] = await Promise.all([
+      worker.processApprovedProposal(tenantId, pending?.id ?? ""),
+      worker.processApprovedProposal(tenantId, pending?.id ?? ""),
+    ]);
+    expect([version, duplicate].filter(Boolean)).toHaveLength(1);
+    const promotedVersion = version ?? duplicate;
+    expect(promotedVersion).not.toBeNull();
+    expect(
+      await playbookRepository.listAll(tenantId, "blog_draft"),
+    ).toHaveLength(1);
+
+    const promoted = await proposalRepository.getByProposalKey(
+      tenantId,
+      "critique:crit-founder-recheck",
+    );
+    expect(promoted).toMatchObject({
+      status: "promoted",
+      humanApprovedBy: "founder@example.test",
+      promotedVersionRef: promotedVersion?.id,
+    });
+  });
+
+  it("only marks a low-risk proposal promoted after durable evidence passes", async () => {
+    const outboxRepository = new InMemoryOutboxRepository();
+    const proposalRepository = new InMemoryLearningProposalRepository();
+    const worker = new LearningWorker({
+      outboxRepository,
+      playbookRepository: new InMemoryPlaybookVersionsRepository(),
+      learningProposalRepository: proposalRepository,
+      promotionEvidenceProvider: {
+        getEvaluation: async (proposal) => ({
+          proposalId: proposal.proposalId,
+          risk: "low",
+          evidenceCount: 30,
+          uniqueEntities: 20,
+          confidence: 0.95,
+          metricDirection: "increase",
+          baselineMetric: 0.1,
+          candidateMetric: 0.12,
+          worstGuardrailRegression: 0,
+          humanApproved: false,
+        }),
+      },
+    });
+
+    const version = await worker.processFromCritique(
+      tenantId,
+      makeCritiquePayload({
+        critique_id: "crit-low-risk-promoted",
+        verdict: "revise",
+        change_risk: "low",
+      }),
+    );
+
+    expect(version).not.toBeNull();
+    const proposal = await proposalRepository.getByProposalKey(
+      tenantId,
+      "critique:crit-low-risk-promoted",
+    );
+    expect(proposal).toMatchObject({
+      status: "promoted",
+      decision: "promote",
+      promotedVersionRef: version?.id,
+    });
+  });
+
+  it("replays a created version when its durable update event initially fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-19T12:00:00.000Z"));
+
+    const outboxRepository = new InMemoryOutboxRepository();
+    const originalEnqueue = outboxRepository.enqueue.bind(outboxRepository);
+    let rejectUpdateOnce = true;
+    const enqueueSpy = vi
+      .spyOn(outboxRepository, "enqueue")
+      .mockImplementation(async (command) => {
+        if (
+          rejectUpdateOnce &&
+          command.eventType === "learning.playbook.updated.v1"
+        ) {
+          rejectUpdateOnce = false;
+          throw new Error("simulated update outbox outage");
+        }
+        return originalEnqueue(command);
+      });
+
+    try {
+      const proposalRepository = new InMemoryLearningProposalRepository();
+      const playbookRepository = new InMemoryPlaybookVersionsRepository();
+      const worker = new LearningWorker({
+        outboxRepository,
+        playbookRepository,
+        learningProposalRepository: proposalRepository,
+        promotionEvidenceProvider: {
+          getEvaluation: async (proposal) => ({
+            proposalId: proposal.proposalId,
+            risk: "low",
+            evidenceCount: 30,
+            uniqueEntities: 20,
+            confidence: 0.95,
+            metricDirection: "increase",
+            baselineMetric: 0.1,
+            candidateMetric: 0.12,
+            worstGuardrailRegression: 0,
+            humanApproved: false,
+          }),
+        },
+      });
+
+      await expect(
+        worker.processFromCritique(
+          tenantId,
+          makeCritiquePayload({
+            critique_id: "crit-update-event-replay",
+            verdict: "revise",
+            change_risk: "low",
+          }),
+        ),
+      ).rejects.toThrow("simulated update outbox outage");
+
+      const pending = await proposalRepository.getByProposalKey(
+        tenantId,
+        "critique:crit-update-event-replay",
+      );
+      expect(pending?.status).toBe("approved");
+      expect(
+        await playbookRepository.listAll(tenantId, "blog_draft"),
+      ).toHaveLength(1);
+      expect(
+        await outboxRepository.listByEventType(
+          tenantId,
+          "learning.playbook.updated.v1",
+          10,
+        ),
+      ).toHaveLength(0);
+
+      // The failed claimant's lease expires; the replay finds the immutable
+      // version, writes the missing event idempotently, then marks promoted.
+      vi.advanceTimersByTime(60_001);
+      const replayed = await worker.processApprovedProposal(
+        tenantId,
+        pending?.id ?? "",
+      );
+      expect(replayed).not.toBeNull();
+      expect(
+        await outboxRepository.listByEventType(
+          tenantId,
+          "learning.playbook.updated.v1",
+          10,
+        ),
+      ).toHaveLength(1);
+      expect(
+        (
+          await proposalRepository.getByProposalKey(
+            tenantId,
+            "critique:crit-update-event-replay",
+          )
+        )?.status,
+      ).toBe("promoted");
+      expect(
+        await playbookRepository.listAll(tenantId, "blog_draft"),
+      ).toHaveLength(1);
+    } finally {
+      enqueueSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("returns null for 'approve' verdict (no corrective signal)", async () => {
@@ -325,14 +659,13 @@ describe("LearningWorker.processFromCritique", () => {
     );
 
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
-    expect(events).toHaveLength(1);
-    expect(events[0]?.eventType).toBe("learning.playbook.updated.v1");
-    expect(events[0]?.payload?.critique_id).toBe("crit-abc");
-
-    expect(eventPublisher.publish).toHaveBeenCalledWith(
-      `t.${tenantId}.learning.playbook.updated.v1`,
-      expect.objectContaining({ verdict: "revise", critique_id: "crit-abc" }),
+    const updated = events.find(
+      (event) => event.eventType === "learning.playbook.updated.v1",
     );
+    expect(events).toHaveLength(2);
+    expect(updated?.payload?.critique_id).toBe("crit-abc");
+
+    expect(eventPublisher.publish).not.toHaveBeenCalled();
   });
 
   it("emits learning.playbook.updated.v1 on reject verdict", async () => {
@@ -345,7 +678,10 @@ describe("LearningWorker.processFromCritique", () => {
     );
 
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
-    expect(events[0]?.payload?.verdict).toBe("reject");
+    const updated = events.find(
+      (event) => event.eventType === "learning.playbook.updated.v1",
+    );
+    expect(updated?.payload?.verdict).toBe("reject");
   });
 
   it("maps content_brief.v1 artifact kind to content_brief playbook type", async () => {
@@ -423,7 +759,10 @@ describe("LearningWorker.processFromCritique", () => {
     );
 
     const events = await outboxRepository.listUnconsumed(tenantId, 10);
-    expect(events[0]?.payload?.criteria_added).toBe(3);
+    const updated = events.find(
+      (event) => event.eventType === "learning.playbook.updated.v1",
+    );
+    expect(updated?.payload?.criteria_added).toBe(3);
   });
 
   it("rejects invalid payload at parse boundary", async () => {

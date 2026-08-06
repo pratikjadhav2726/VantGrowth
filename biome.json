@@ -12,6 +12,14 @@
     }
   },
   "files": {
-    "ignore": ["**/dist/**", "**/node_modules/**", "**/.pnpm-store/**"]
+    "ignore": [
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/.pnpm-store/**",
+      "**/.turbo/**",
+      "**/.next/**",
+      "**/coverage/**",
+      "**/*.tsbuildinfo"
+    ]
   }
 }

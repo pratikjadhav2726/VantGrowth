@@ -191,8 +191,7 @@ const KNOWN_CHECKS = new Set([
   "has_hook",
 ]);
 
-export const isKnownCheck = (check: string): boolean =>
-  KNOWN_CHECKS.has(check);
+export const isKnownCheck = (check: string): boolean => KNOWN_CHECKS.has(check);
 
 // ---------------------------------------------------------------------------
 // Per-criterion LLM evaluator (for custom/unknown checks)
@@ -216,11 +215,17 @@ export const evaluateCriterionWithLlm = async (
 ): Promise<{ passed: boolean; details: string }> => {
   let content: string;
   try {
-    const result = await runner.run(RUBRIC_CRITERION_EVALUATE_PROMPT, {
-      criterionId: criterion.id,
-      criterionDescription: criterion.description,
-      candidateText: text,
-    });
+    const result = await runner.run(
+      RUBRIC_CRITERION_EVALUATE_PROMPT,
+      {
+        criterionId: criterion.id,
+        criterionDescription: criterion.description,
+        candidateText: text,
+      },
+      {
+        responseFormat: { type: "json_object" },
+      },
+    );
     content = result.content;
   } catch {
     return {

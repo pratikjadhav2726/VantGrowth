@@ -349,3 +349,28 @@ describe("schema registry + parseHandoffContract", () => {
     ).toThrow("Unknown handoff contract version");
   });
 });
+
+describe("experiment lineage", () => {
+  it("accepts and preserves a tenant-scoped experiment id across every handoff artifact", () => {
+    const experimentId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+    expect(
+      intelBriefV1Schema.parse(makeIntelBrief({ experiment_id: experimentId }))
+        .experiment_id,
+    ).toBe(experimentId);
+    expect(
+      contentOpportunityV1Schema.parse(
+        makeContentOpportunity({ experiment_id: experimentId }),
+      ).experiment_id,
+    ).toBe(experimentId);
+    expect(
+      contentBriefV1Schema.parse(
+        makeContentBrief({ experiment_id: experimentId }),
+      ).experiment_id,
+    ).toBe(experimentId);
+    expect(
+      blogDraftV1Schema.parse(makeBlogDraft({ experiment_id: experimentId }))
+        .experiment_id,
+    ).toBe(experimentId);
+  });
+});

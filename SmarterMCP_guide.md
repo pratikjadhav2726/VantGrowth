@@ -1,5 +1,7 @@
 # SmarterMCP
 
+> **Disabled legacy reference:** GrowthOS now uses n8n as the single external connector fabric. This document is retained for gateway concepts such as policy, audit, and response control; it is not an active implementation dependency.
+
 ## What SmarterMCP Does
 
 SmarterMCP is a multi-tenant MCP gateway that sits between AI agents or hosts and the underlying MCP servers they need to use.

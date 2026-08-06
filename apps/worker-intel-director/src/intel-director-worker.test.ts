@@ -113,6 +113,44 @@ describe("generateDeterministicBrief", () => {
     expect(brief.period.to).toBe("2026-04-28");
   });
 
+  it("preserves experiment lineage from the durable request", () => {
+    const experimentId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const request = intelBriefRequestedV1Schema.parse(
+      makeValidRequest({ experiment_id: experimentId }),
+    );
+
+    expect(generateDeterministicBrief(request).experiment_id).toBe(experimentId);
+  });
+
+  it("grounds a deterministic brief in its triggering signal", () => {
+    const request = intelBriefRequestedV1Schema.parse(
+      makeValidRequest({
+        trigger: {
+          signal_id: "42",
+          signal_type: "competitive",
+          source: "competitor.watch",
+          kind: "competitor.pricing_change",
+          priority: "P1",
+          payload: {
+            competitor: "Acme",
+            summary: "Acme introduced a free tier for mid-market buyers.",
+            source_url: "https://example.com/pricing",
+          },
+          occurred_at: "2026-04-14T10:00:00.000Z",
+        },
+      }),
+    );
+
+    const brief = generateDeterministicBrief(request);
+
+    expect(brief.competitive_signals[0]).toMatchObject({
+      competitor: "Acme",
+      signal_type: "pricing_change",
+      source_url: "https://example.com/pricing",
+    });
+    expect(brief.content_opportunities[0]?.rationale).toContain("Acme");
+  });
+
   it("generates unique brief_ids on consecutive calls", () => {
     const request = intelBriefRequestedV1Schema.parse(makeValidRequest());
     const brief1 = generateDeterministicBrief(request);
@@ -132,7 +170,7 @@ describe("IntelDirectorWorker", () => {
     return { worker, outboxRepository, eventPublisher };
   };
 
-  it("enqueues intel_brief.v1 in outbox and publishes to NATS", async () => {
+  it("enqueues intel_brief.v1 in the durable outbox", async () => {
     const publishFn = vi.fn(async () => undefined);
     const { worker, outboxRepository } = makeWorker(publishFn);
 
@@ -145,11 +183,7 @@ describe("IntelDirectorWorker", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.eventType).toBe("intel_brief.v1");
 
-    expect(publishFn).toHaveBeenCalledOnce();
-    expect(publishFn).toHaveBeenCalledWith(
-      `t.${TENANT_ID}.intel_brief.v1`,
-      expect.objectContaining({ schema_version: "intel_brief.v1" }),
-    );
+    expect(publishFn).not.toHaveBeenCalled();
   });
 
   it("is idempotent: duplicate request_id is dropped by outbox constraint", async () => {
@@ -276,6 +310,23 @@ describe("generateLlmBrief", () => {
     const result = await generateLlmBrief(baseRequest, runner);
     expect(result?.tenant_id).toBe(TENANT_ID);
   });
+
+  it("injects experiment lineage from the request, never from the LLM", async () => {
+    const experimentId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const request = intelBriefRequestedV1Schema.parse(
+      makeValidRequest({ experiment_id: experimentId }),
+    );
+    const runner = new StubLlmCallRunner({
+      "intel-brief.generate-structured": JSON.stringify({
+        ...JSON.parse(VALID_LLM_BRIEF_JSON(TENANT_ID)),
+        experiment_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      }),
+    });
+
+    expect((await generateLlmBrief(request, runner))?.experiment_id).toBe(
+      experimentId,
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -325,11 +376,11 @@ describe("IntelDirectorWorker (LLM path)", () => {
     expect(result.content_opportunities[0]?.title).toContain("Baseline");
   });
 
-  it("publishes to NATS via tenant-scoped subject", async () => {
+  it("leaves delivery to the durable outbox publisher", async () => {
     const { worker, events } = makeWorkerWithLlm();
     await worker.processBriefRequest(makeValidRequest());
 
-    expect(events[0]?.subject).toBe(`t.${TENANT_ID}.intel_brief.v1`);
+    expect(events).toHaveLength(0);
   });
 
   it("records the LLM call in the runner's call history", async () => {

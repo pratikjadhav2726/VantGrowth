@@ -25,11 +25,20 @@ const packageRoot = path.resolve(__dirname, "..");
  */
 const CORE_TABLES = [
   "approval_feedback",
+  "component_health",
   "event_outbox",
+  "experiment_assignments",
+  "experiment_observations",
+  "experiments",
+  "external_action_events",
+  "external_actions",
+  "incidents",
+  "learning_proposals",
   "motion_scores",
   "motion_stack",
   "playbook_versions",
   "signal_events",
+  "tenant_settings",
   "workflow_runs",
 ] as const;
 

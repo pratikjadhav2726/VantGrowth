@@ -11,6 +11,7 @@
  * requires the API bearer token (wired in app.ts).
  */
 
+import { adaptiveGtmSettingsSchema } from "@growthos/core";
 import type { TenantSettingsRepository } from "@growthos/db";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -20,7 +21,27 @@ export interface SettingsDeps {
   tenantSettingsRepository: TenantSettingsRepository | null;
 }
 
-const settingsPatchSchema = z.record(z.unknown());
+/**
+ * Existing settings remain extensible, while the adaptive harness receives a
+ * strict contract. This lets older tenants migrate incrementally without
+ * allowing malformed learning/healing policies into runtime control paths.
+ */
+const settingsPatchSchema = z
+  .record(z.unknown())
+  .superRefine((settings, ctx) => {
+    if (settings.adaptiveGtm === undefined) return;
+
+    const result = adaptiveGtmSettingsSchema.safeParse(settings.adaptiveGtm);
+    if (result.success) return;
+
+    for (const issue of result.error.issues) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["adaptiveGtm", ...issue.path],
+        message: issue.message,
+      });
+    }
+  });
 
 export function createSettingsRoutes(deps: SettingsDeps) {
   const route = new Hono();

@@ -83,7 +83,10 @@ export const gradeSignalPayload = async (
         rawPayload: JSON.stringify(input.payload, null, 2),
         motionContext,
       },
-      { tenantId: input.tenantId },
+      {
+        tenantId: input.tenantId,
+        responseFormat: { type: "json_object" },
+      },
     );
     content = result.content;
   } catch {
